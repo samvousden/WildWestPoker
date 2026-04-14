@@ -11,7 +11,7 @@ export enum HandPhase {
   Dealing = 1,
   Betting = 2,
   Showdown = 3,
-  Payout = 4,
+  ItemShop = 4,
 }
 
 export enum PokerActionType {
@@ -19,6 +19,19 @@ export enum PokerActionType {
   Check = 1,
   Call = 2,
   RaiseTo = 3,
+}
+
+export enum ItemType {
+  Item1 = 1,
+  Item2 = 2,
+  Item3 = 3,
+}
+
+export interface Item {
+  id: ItemType;
+  name: string;
+  description: string;
+  cost: number;
 }
 
 export interface PokerAction {
@@ -37,6 +50,12 @@ export interface PlayerPublicState {
   isInHand: boolean;
   hasFolded: boolean;
   isAllIn: boolean;
+  isBot: boolean;
+  inventory: ItemType[]; // Items owned by player
+  lastAction?: {
+    type: PokerActionType;
+    amount?: number;
+  };
 }
 
 export interface GameState {

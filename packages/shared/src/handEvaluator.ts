@@ -22,6 +22,30 @@ export interface HandValue {
   kickerCards: Card[];
 }
 
+export interface BestHandResult {
+  ranking: HandRanking;
+  cards: Card[];
+}
+
+/**
+ * Convert HandRanking enum to human-readable string
+ */
+export function getHandRankingName(ranking: HandRanking): string {
+  const names: { [key in HandRanking]: string } = {
+    [HandRanking.HighCard]: 'High Card',
+    [HandRanking.OnePair]: 'One Pair',
+    [HandRanking.TwoPair]: 'Two Pair',
+    [HandRanking.ThreeOfAKind]: 'Three of a Kind',
+    [HandRanking.Straight]: 'Straight',
+    [HandRanking.Flush]: 'Flush',
+    [HandRanking.FullHouse]: 'Full House',
+    [HandRanking.FourOfAKind]: 'Four of a Kind',
+    [HandRanking.StraightFlush]: 'Straight Flush',
+    [HandRanking.RoyalFlush]: 'Royal Flush',
+  };
+  return names[ranking];
+}
+
 /**
  * Evaluates a 5-card poker hand.
  * Returns a comparable score where higher is better.
@@ -103,6 +127,44 @@ export function evaluateBestHand(holeCards: Card[], boardCards: Card[]): HandVal
   }
 
   return bestHand!;
+}
+
+/**
+ * Evaluates the best 5-card hand from 7 cards and returns the actual cards
+ */
+export function evaluateBestHandWithCards(holeCards: Card[], boardCards: Card[]): BestHandResult {
+  const allCards = [...holeCards, ...boardCards];
+  
+  if (allCards.length !== 7) {
+    throw new Error('Must provide 2 hole cards and 5 board cards');
+  }
+
+  let bestHand: HandValue | null = null;
+  let bestCards: Card[] = [];
+
+  // Try all 5-card combinations
+  for (let i = 0; i < allCards.length; i++) {
+    for (let j = i + 1; j < allCards.length; j++) {
+      for (let k = j + 1; k < allCards.length; k++) {
+        for (let l = k + 1; l < allCards.length; l++) {
+          for (let m = l + 1; m < allCards.length; m++) {
+            const fiveCards = [allCards[i], allCards[j], allCards[k], allCards[l], allCards[m]];
+            const hand = evaluateFiveCardHand(fiveCards);
+
+            if (!bestHand || hand.score > bestHand.score) {
+              bestHand = hand;
+              bestCards = fiveCards;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    ranking: bestHand!.ranking,
+    cards: bestCards,
+  };
 }
 
 function checkStraightFlush(cards: Card[]): HandValue | null {

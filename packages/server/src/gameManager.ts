@@ -9,7 +9,7 @@ import {
   Suit,
   Rank,
   evaluateBestHand,
-  UseItemType,
+  ItemType,
 } from '@poker/shared';
 
 /**
@@ -21,6 +21,11 @@ export class GameManager {
   private holeCards: Map<number, [Card, Card]> = new Map();
   private deck: Card[] = [];
   private rng = Math.random;
+  private lastRaiserId: number = 0; // Track who last raised/bet
+  private playersActedThisRound: Set<number> = new Set(); // Track who has acted
+  private winnerId: number = 0; // Track the current hand winner
+  private winnerIds: number[] = []; // Track all tied winners
+  private foldedOut: boolean = false; // Track if winner folded out (vs showdown)
 
   constructor() {
     this.gameState = {
@@ -40,6 +45,68 @@ export class GameManager {
     return this.gameState;
   }
 
+  getHoleCards(playerId: number): Card[] | undefined {
+    const cards = this.holeCards.get(playerId);
+    return cards ? [...cards] : undefined;
+  }
+
+  getAllHoleCards(): Map<number, Card[]> {
+    return new Map(this.holeCards);
+  }
+
+  getWinnerId(): number {
+    return this.winnerId;
+  }
+
+  getWinnerIds(): number[] {
+    return this.winnerIds;
+  }
+
+  isFoldedOut(): boolean {
+    return this.foldedOut;
+  }
+
+  getBotAction(botId: number): PokerAction {
+    const bot = this.gameState.players.find(p => p.id === botId);
+    if (!bot || !bot.isBot) {
+      throw new Error('Player is not a bot');
+    }
+
+    // For now, bots always call or check
+    const currentBet = this.gameState.currentBetToMatch;
+    const playerCommitted = bot.committedThisRound;
+
+    if (currentBet === playerCommitted) {
+      // Can check
+      return { type: PokerActionType.Check };
+    } else {
+      // Must call
+      return { type: PokerActionType.Call };
+    }
+  }
+
+  returnToLobby(): void {
+    this.gameState.phase = HandPhase.Lobby;
+    this.gameState.round = BettingRound.None;
+    
+    this.winnerId = 0;
+    this.winnerIds = [];
+    this.foldedOut = false;
+
+    // Reset all players' ready status when returning to Lobby
+    // Each hand requires fresh ready-up
+    for (const player of this.gameState.players) {
+      player.isReady = false;
+    }
+    
+    // In bot mode, auto-ready the bots so they're ready for the next hand
+    for (const player of this.gameState.players) {
+      if (player.isBot) {
+        player.isReady = true;
+      }
+    }
+  }
+
   joinTable(playerName: string): number {
     const playerId = this.gameState.players.length + 1;
 
@@ -54,7 +121,51 @@ export class GameManager {
       isInHand: false,
       hasFolded: false,
       isAllIn: false,
+      isBot: false,
+      inventory: [],
     });
+
+    return playerId;
+  }
+
+  playVsBots(playerName: string): number {
+    // Clear any existing players
+    this.gameState.players = [];
+
+    // Add human player
+    const playerId = 1;
+    this.gameState.players.push({
+      id: playerId,
+      name: playerName,
+      stack: 1000,
+      committedThisRound: 0,
+      contributedThisHand: 0,
+      isSeated: true,
+      isReady: false,
+      isInHand: false,
+      hasFolded: false,
+      isAllIn: false,
+      isBot: false,
+      inventory: [],
+    });
+
+    // Add 3 bots with auto-ready
+    for (let i = 1; i <= 3; i++) {
+      this.gameState.players.push({
+        id: i + 1,
+        name: `bot ${i}`,
+        stack: 1000,
+        committedThisRound: 0,
+        contributedThisHand: 0,
+        isSeated: true,
+        isReady: true, // Bots auto-ready
+        isInHand: false,
+        hasFolded: false,
+        isAllIn: false,
+        isBot: true,
+        inventory: [],
+      });
+    }
 
     return playerId;
   }
@@ -80,6 +191,16 @@ export class GameManager {
       player.hasFolded = false;
       player.isInHand = false;
       player.isAllIn = false;
+      player.lastAction = undefined; // Clear last action
+    }
+
+    // Rotate dealer button
+    if (this.gameState.dealerPlayerId === 0) {
+      this.gameState.dealerPlayerId = this.gameState.players[0]?.id || 1;
+    } else {
+      const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
+      const nextIndex = (dealerIndex + 1) % this.gameState.players.length;
+      this.gameState.dealerPlayerId = this.gameState.players[nextIndex].id;
     }
 
     this.gameState.phase = HandPhase.Dealing;
@@ -88,6 +209,8 @@ export class GameManager {
     this.gameState.currentBetToMatch = 0;
     this.gameState.board = [];
     this.holeCards.clear();
+    this.playersActedThisRound.clear(); // Reset action tracking for new hand
+    this.lastRaiserId = 0;
 
     // Shuffle deck and deal
     this.shuffleDeck();
@@ -98,7 +221,15 @@ export class GameManager {
 
     // Transition to betting
     this.gameState.phase = HandPhase.Betting;
-    this.gameState.activePlayerId = this.getNextActivePlayer(this.gameState.dealerPlayerId);
+    // First to act in preflop is UTG (2 players after dealer): dealer+2
+    const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
+    const utg = (dealerIndex + 2) % this.gameState.players.length;
+    this.gameState.activePlayerId = this.gameState.players[utg].id;
+    
+    // Big blind is last to act preflop (for initial raise opportunity)
+    this.lastRaiserId = this.gameState.players
+      .filter(p => p.isInHand)
+      .sort((a, b) => b.committedThisRound - a.committedThisRound)[0]?.id || 0;
   }
 
   submitAction(playerId: number, action: PokerAction): boolean {
@@ -114,12 +245,16 @@ export class GameManager {
     switch (action.type) {
       case PokerActionType.Fold:
         player.hasFolded = true;
+        player.lastAction = { type: PokerActionType.Fold };
         break;
 
       case PokerActionType.Check:
-        if (this.gameState.currentBetToMatch > 0) {
-          return false; // Can't check if there's a bet to match
+        // Can only check if player has matched the current bet
+        const betToMatch = this.gameState.currentBetToMatch - player.committedThisRound;
+        if (betToMatch > 0) {
+          return false; // Can't check if there's unmatched bet
         }
+        player.lastAction = { type: PokerActionType.Check };
         break;
 
       case PokerActionType.Call:
@@ -129,10 +264,13 @@ export class GameManager {
           player.stack -= actualAmount;
           player.committedThisRound += actualAmount;
           this.gameState.pot += actualAmount;
+          player.lastAction = { type: PokerActionType.Call, amount: actualAmount };
 
           if (player.stack === 0) {
             player.isAllIn = true;
           }
+        } else {
+          player.lastAction = { type: PokerActionType.Check };
         }
         break;
 
@@ -143,6 +281,9 @@ export class GameManager {
           player.committedThisRound += raiseAmount;
           this.gameState.pot += raiseAmount;
           this.gameState.currentBetToMatch = action.raiseToAmount || 0;
+          this.lastRaiserId = playerId; // Track last raiser
+          this.playersActedThisRound.clear(); // Reset action tracking on raise
+          player.lastAction = { type: PokerActionType.RaiseTo, amount: action.raiseToAmount };
 
           if (player.stack === 0) {
             player.isAllIn = true;
@@ -154,6 +295,20 @@ export class GameManager {
 
       default:
         return false;
+    }
+
+    // Track that this player has acted
+    this.playersActedThisRound.add(playerId);
+
+    // Check if only 1 active player remains (all others folded)
+    const activePlayersCount = this.gameState.players.filter(
+      p => p.isInHand && !p.hasFolded
+    ).length;
+
+    if (activePlayersCount === 1) {
+      // One player remains - they win immediately
+      this.handleFoldOutWinner();
+      return true;
     }
 
     // Move to next active player
@@ -170,6 +325,28 @@ export class GameManager {
   useItem(playerId: number, useType: number, targetPlayerId?: number): boolean {
     // Stub for item usage (cheating, violence, banking)
     // Extend with actual business logic
+    return true;
+  }
+
+  buyItem(playerId: number, itemType: ItemType): boolean {
+    const player = this.gameState.players.find(p => p.id === playerId);
+    if (!player) return false;
+
+    // Define item costs
+    const itemCosts: { [key in ItemType]: number } = {
+      [ItemType.Item1]: 50,
+      [ItemType.Item2]: 75,
+      [ItemType.Item3]: 100,
+    };
+
+    const cost = itemCosts[itemType];
+    if (player.stack < cost) {
+      return false; // Not enough chips
+    }
+
+    // Deduct cost and add to inventory
+    player.stack -= cost;
+    player.inventory.push(itemType);
     return true;
   }
 
@@ -243,21 +420,37 @@ export class GameManager {
       return true; // Only one player left
     }
 
-    // All active players have matched the current bet or are all-in
-    return activePlayers.every(
-      p => p.committedThisRound === this.gameState.currentBetToMatch || p.isAllIn
+    // All active players must have acted at least once
+    const allActed = activePlayers.every(p => this.playersActedThisRound.has(p.id));
+    if (!allActed) {
+      return false;
+    }
+
+    // All active players have matched the current bet
+    const allMatched = activePlayers.every(
+      p => p.committedThisRound === this.gameState.currentBetToMatch
     );
+
+    if (!allMatched) {
+      return false;
+    }
+
+    // If all have acted and matched, round is complete
+    return true;
   }
 
   private advanceBettingRound(): void {
-    // Reset committed amounts for next round
+    // Reset committed amounts for next round and clear last actions
     for (const player of this.gameState.players) {
       if (player.isInHand && !player.hasFolded) {
         player.committedThisRound = 0;
       }
+      player.lastAction = undefined; // Clear last action for new round
     }
 
     this.gameState.currentBetToMatch = 0;
+    this.lastRaiserId = 0; // Reset for new round
+    this.playersActedThisRound.clear(); // Reset action tracking for new round
 
     if (this.gameState.round === BettingRound.Preflop) {
       this.gameState.board = this.dealFlop();
@@ -271,11 +464,15 @@ export class GameManager {
     } else if (this.gameState.round === BettingRound.River) {
       this.gameState.phase = HandPhase.Showdown;
       this.evaluateShowdown();
+      return;
     }
 
-    if (this.gameState.phase !== HandPhase.Showdown) {
-      this.gameState.activePlayerId = this.getNextActivePlayer(this.gameState.dealerPlayerId);
-    }
+    // For postflop, action starts with small blind (dealer+1)
+    const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
+    const smallBlindIndex = (dealerIndex + 1) % this.gameState.players.length;
+    const firstToAct = this.gameState.players[smallBlindIndex].id;
+    this.gameState.activePlayerId = firstToAct;
+    this.lastRaiserId = firstToAct; // First to act is initial "last raiser"
   }
 
   private dealFlop(): Card[] {
@@ -305,24 +502,54 @@ export class GameManager {
 
     if (activePlayers.length === 0) return;
 
-    // Find best hand
-    let bestPlayer = activePlayers[0];
+    // Find best hand(s) - track all players with the same best score
     let bestScore = -1;
+    const playerScores: { player: PlayerPublicState; score: number }[] = [];
 
     for (const player of activePlayers) {
       const hole = this.holeCards.get(player.id);
       if (hole) {
         const handValue = evaluateBestHand([hole[0], hole[1]], this.gameState.board);
+        playerScores.push({ player, score: handValue.score });
         if (handValue.score > bestScore) {
           bestScore = handValue.score;
-          bestPlayer = player;
         }
       }
     }
 
-    // Award pot to winner
-    bestPlayer.stack += this.gameState.pot;
+    // Find all winners (handles ties)
+    const winners = playerScores.filter(ps => ps.score === bestScore).map(ps => ps.player);
+    this.winnerIds = winners.map(w => w.id);
+    this.winnerId = winners[0].id; // Display first winner
 
-    this.gameState.phase = HandPhase.Payout;
+    // Split pot among all winners
+    const potShare = Math.floor(this.gameState.pot / winners.length);
+    const remainder = this.gameState.pot % winners.length;
+    
+    for (let i = 0; i < winners.length; i++) {
+      // Give remainder to first winner if pot doesn't divide evenly
+      winners[i].stack += potShare + (i === 0 ? remainder : 0);
+    }
+
+    // Transition to showdown phase
+    this.gameState.phase = HandPhase.Showdown;
+  }
+
+  private handleFoldOutWinner(): void {
+    // Find the last remaining active player
+    const activePlayers = this.gameState.players.filter(
+      p => p.isInHand && !p.hasFolded
+    );
+
+    if (activePlayers.length !== 1) return;
+
+    const winner = activePlayers[0];
+    // Award pot to winner
+    winner.stack += this.gameState.pot;
+    this.winnerId = winner.id;
+    this.foldedOut = true;
+
+    // Transition to showdown phase (will show simplified winner screen)
+    this.gameState.phase = HandPhase.Showdown;
   }
 }
