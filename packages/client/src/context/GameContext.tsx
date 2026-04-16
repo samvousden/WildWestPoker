@@ -40,6 +40,7 @@ interface GameContextType {
   shootPlayer: (targetPlayerId: number) => void;
   cashOutBond: (bondIndex: number) => void;
   cashOutStockOption: (optionIndex: number) => void;
+  leaveTable: () => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -299,6 +300,30 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   }, [socket, playerId, refreshSleeveCard]);
 
+  const leaveTable = useCallback(() => {
+    setPlayerId(null);
+    setGameState(null);
+    setHoleCards(null);
+    setSleeveCard(null);
+    setSleeveCard2(null);
+    setSleeveUsedThisHand(false);
+    setAllPlayerCards(null);
+    setWinnerId(null);
+    setWinnerIds([]);
+    setFoldedOut(false);
+    setXrayCharges(0);
+    setHiddenCameraCharges(0);
+    setRevealedCards(new Map());
+    setPeekedCard(null);
+    setHasGun(false);
+    setBullets(0);
+    setShotFiredEvent(null);
+    setBonds([]);
+    setStockOptions([]);
+    setTotalLuck(0);
+    setLuckBuffs([]);
+  }, []);
+
   // Refresh sleeve card when player joins or on game state updates
   useEffect(() => {
     if (socket && playerId) {
@@ -344,6 +369,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         shootPlayer,
         cashOutBond,
         cashOutStockOption,
+        leaveTable,
       }}
     >
       {children}

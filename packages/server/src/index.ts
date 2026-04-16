@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import { GameManager } from './gameManager.js';
-import { GameState, PokerAction, ShopItemType, Card, getCardPrice, ShopSlotItem, resolveJokersForShowdown, isJokerCard } from '@poker/shared';
+import { GameState, PokerAction, PokerActionType, ShopItemType, Card, getCardPrice, ShopSlotItem, resolveJokersForShowdown, isJokerCard } from '@poker/shared';
 
 const app = express();
 const httpServer = createServer(app);
@@ -46,11 +46,28 @@ async function executeBotTurns(): Promise<void> {
       break;
     }
     
-    // If bot is folded or all-in, they already acted, skip them
+    // If bot is folded or all-in, handle gracefully
     if (activePlayer.hasFolded || activePlayer.isAllIn) {
-      console.log(`[Bot] ${activePlayer.name} folded/all-in, moving forward`);
-      // Just move forward - the submitAction for previous player already moved activePlayerId
-      currentState = gameManager.getGameState();
+      if (!activePlayer.hasFolded && activePlayer.isAllIn) {
+        // All-in bots submit Check to release their item-only turn
+        console.log(`[Bot] ${activePlayer.name} all-in, submitting check to pass item turn`);
+        const checkSuccess = gameManager.submitAction(activePlayer.id, { type: PokerActionType.Check });
+        if (checkSuccess) {
+          currentState = gameManager.getGameState();
+          io.emit('game-state-updated', currentState);
+          if (currentState.phase === 3 && lastGamePhase !== 3) {
+            lastGamePhase = 3;
+            handleShowdown();
+            return;
+          }
+        } else {
+          console.error(`[Bot Error] ${activePlayer.name} all-in check failed`);
+          currentState = gameManager.getGameState();
+        }
+      } else {
+        console.log(`[Bot] ${activePlayer.name} folded, skipping`);
+        currentState = gameManager.getGameState();
+      }
       continue;
     }
     
@@ -356,6 +373,17 @@ io.on('connection', (socket) => {
       io.emit('game-state-updated', gameManager.getGameState());
     }
     callback(result);
+  });
+
+  socket.on('unlock-shop-slot', (playerId: number, callback) => {
+    const result = gameManager.unlockShopSlot(playerId);
+    if (result.success) {
+      io.emit('game-state-updated', gameManager.getGameState());
+      const slots = gameManager.getShopSlots(playerId);
+      callback({ success: true, slots });
+    } else {
+      callback({ success: false, error: result.error });
+    }
   });
 
   socket.on('get-shop-slots', (playerId: number, callback) => {

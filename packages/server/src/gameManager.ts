@@ -20,11 +20,14 @@ import {
   getPrice,
   getShopItemInfo,
   getEligibleShopItems,
+  getItemRarity,
+  getItemShopWeight,
   cardToString,
   isJokerCard,
   JOKER_CARD,
   getTotalLuck,
   getBondCashOutValue,
+  getStockOptionCashOutValue,
 } from '@poker/shared';
 
 /**
@@ -37,9 +40,8 @@ export class GameManager {
   private playerPrivateState: Map<number, PlayerPrivateState> = new Map();
   private playerShopSlots: Map<number, ShopSlotItem[]> = new Map();
   private deck: Card[] = [];
-  private rng = Math.random;
-  private lastRaiserId: number = 0; // Track who last raised/bet
-  private playersActedThisRound: Set<number> = new Set(); // Track who has acted
+  private lastRaiserId: number = 0; // Id of last player to voluntarily bet/raise (0 = no raise yet this round)
+  private playersActedThisRound: Set<number> = new Set(); // Tracks who has voluntarily acted; cleared for non-all-in on raise
   private sleeveSwappedThisRound: Set<number> = new Set(); // Track sleeve swaps per round
   private winnerId: number = 0; // Track the current hand winner
   private winnerIds: number[] = []; // Track all tied winners
@@ -146,8 +148,6 @@ export class GameManager {
 
     // Initialize private state for this player
     this.playerPrivateState.set(playerId, {
-      hasBankAccount: false,
-      bankBalance: 0,
       hasGun: false,
       bullets: 0,
       hasCardSleeveUnlock: false,
@@ -162,6 +162,9 @@ export class GameManager {
       cheatedThisHand: false,
       bonds: [],
       stockOptions: [],
+      hasFourLeafClover: false,
+      hasFiveLeafClover: false,
+      unlockedShopSlots: 1,
     });
 
     return playerId;
@@ -191,8 +194,6 @@ export class GameManager {
     });
 
     this.playerPrivateState.set(playerId, {
-      hasBankAccount: false,
-      bankBalance: 0,
       hasGun: false,
       bullets: 0,
       hasCardSleeveUnlock: false,
@@ -207,6 +208,9 @@ export class GameManager {
       cheatedThisHand: false,
       bonds: [],
       stockOptions: [],
+      hasFourLeafClover: false,
+      hasFiveLeafClover: false,
+      unlockedShopSlots: 1,
     });
 
     // Add 3 bots with auto-ready
@@ -229,8 +233,6 @@ export class GameManager {
       });
 
       this.playerPrivateState.set(botId, {
-        hasBankAccount: false,
-        bankBalance: 0,
         hasGun: false,
         bullets: 0,
         hasCardSleeveUnlock: false,
@@ -245,6 +247,9 @@ export class GameManager {
         cheatedThisHand: false,
         bonds: [],
         stockOptions: [],
+        hasFourLeafClover: false,
+        hasFiveLeafClover: false,
+        unlockedShopSlots: 1,
       });
     }
 
@@ -280,22 +285,33 @@ export class GameManager {
       ps.cheatedThisHand = false;
 
       // Age bonds and stock options
-      for (const bond of ps.bonds) bond.roundsHeld++;
+      for (const bond of ps.bonds) {
+        bond.roundsHeld++;
+        // Grow 10% per hand starting from the 2nd hand held (not the first)
+        if (bond.roundsHeld >= 2) {
+          bond.currentValue = Math.min(1000, Math.round(bond.currentValue * 1.1));
+        }
+      }
       for (const opt of ps.stockOptions) opt.roundsHeld++;
 
       // Tick down luck buffs and remove expired ones
       ps.luckBuffs = ps.luckBuffs
         .map(b => ({ ...b, turnsRemaining: b.turnsRemaining - 1 }))
         .filter(b => b.turnsRemaining > 0);
+
+      // Reset shop slot unlocks for the new hand's shop visit
+      ps.unlockedShopSlots = 1;
     }
 
-    // Rotate dealer button
+    // Rotate dealer button — skip eliminated players
+    const activePlayers = this.gameState.players.filter(p => !p.isEliminated);
+    if (activePlayers.length === 0) return;
     if (this.gameState.dealerPlayerId === 0) {
-      this.gameState.dealerPlayerId = this.gameState.players[0]?.id || 1;
+      this.gameState.dealerPlayerId = activePlayers[0].id;
     } else {
-      const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
-      const nextIndex = (dealerIndex + 1) % this.gameState.players.length;
-      this.gameState.dealerPlayerId = this.gameState.players[nextIndex].id;
+      const dealerIdx = activePlayers.findIndex(p => p.id === this.gameState.dealerPlayerId);
+      const nextIdx = (dealerIdx + 1) % activePlayers.length;
+      this.gameState.dealerPlayerId = activePlayers[nextIdx].id;
     }
 
     this.gameState.phase = HandPhase.Dealing;
@@ -317,15 +333,15 @@ export class GameManager {
 
     // Transition to betting
     this.gameState.phase = HandPhase.Betting;
-    // First to act in preflop is UTG (2 players after dealer): dealer+2
-    const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
-    const utg = (dealerIndex + 2) % this.gameState.players.length;
-    this.gameState.activePlayerId = this.gameState.players[utg].id;
+    // First to act preflop is the player after the big blind
+    const sbId = this.getNextActivePlayerFromDealer(this.gameState.dealerPlayerId);
+    const bbId = this.getNextActivePlayerFromDealer(sbId);
+    const utgId = this.getNextActivePlayerFromDealer(bbId);
+    this.gameState.activePlayerId = utgId || sbId || this.gameState.dealerPlayerId;
     
-    // Big blind is last to act preflop (for initial raise opportunity)
-    this.lastRaiserId = this.gameState.players
-      .filter(p => p.isInHand)
-      .sort((a, b) => b.committedThisRound - a.committedThisRound)[0]?.id || 0;
+    // Big blind is last to act preflop — but this is a forced blind, not a voluntary raise
+    // so lastRaiserId stays 0 (no raise yet; round ends when all non-all-in players have acted)
+    this.lastRaiserId = 0;
   }
 
   submitAction(playerId: number, action: PokerAction): boolean {
@@ -334,8 +350,31 @@ export class GameManager {
     }
 
     const player = this.gameState.players.find(p => p.id === playerId);
-    if (!player || player.hasFolded || player.isAllIn) {
+    if (!player || player.hasFolded) {
       return false;
+    }
+
+    // All-in players can only Check (pass their turn — use items before clicking)
+    if (player.isAllIn) {
+      if (action.type !== PokerActionType.Check) {
+        return false;
+      }
+      player.lastAction = { type: PokerActionType.Check };
+      this.playersActedThisRound.add(playerId);
+
+      const activePlayersCount = this.gameState.players.filter(
+        p => p.isInHand && !p.hasFolded
+      ).length;
+      if (activePlayersCount === 1) {
+        this.handleFoldOutWinner();
+        return true;
+      }
+
+      this.gameState.activePlayerId = this.getNextActivePlayer(playerId);
+      if (this.isBettingRoundComplete()) {
+        this.advanceBettingRound();
+      }
+      return true;
     }
 
     switch (action.type) {
@@ -377,8 +416,13 @@ export class GameManager {
           player.committedThisRound += raiseAmount;
           this.gameState.pot += raiseAmount;
           this.gameState.currentBetToMatch = action.raiseToAmount || 0;
-          this.lastRaiserId = playerId; // Track last raiser
-          this.playersActedThisRound.clear(); // Reset action tracking on raise
+          this.lastRaiserId = playerId;
+          // Only non-all-in players need to respond — all-in players keep their acted flag
+          for (const p of this.gameState.players) {
+            if (p.isInHand && !p.hasFolded && !p.isAllIn) {
+              this.playersActedThisRound.delete(p.id);
+            }
+          }
           player.lastAction = { type: PokerActionType.RaiseTo, amount: action.raiseToAmount };
 
           if (player.stack === 0) {
@@ -437,13 +481,8 @@ export class GameManager {
         return false;
       }
 
-      // Only 1 swap allowed per betting round
+      // Only 1 swap allowed per hand
       if (this.sleeveSwappedThisRound.has(playerId)) {
-        return false;
-      }
-
-      // Can't swap if all-in
-      if (player.isAllIn) {
         return false;
       }
 
@@ -469,12 +508,8 @@ export class GameManager {
         return false;
       }
 
-      // Only 1 swap allowed per betting round (shared limit with slot 1)
+      // Only 1 swap allowed per hand (shared limit with slot 1)
       if (this.sleeveSwappedThisRound.has(playerId)) {
-        return false;
-      }
-
-      if (player.isAllIn) {
         return false;
       }
 
@@ -615,30 +650,44 @@ export class GameManager {
       return true;
     }
 
-    // Handle Lucky Charm — permanently +7 luck
-    if (itemType === ShopItemType.LuckyCharm) {
-      const cost = getPrice(ShopItemType.LuckyCharm);
+    // Handle 4 Leaf Clover — permanently +7 luck (one-time)
+    if (itemType === ShopItemType.FourLeafClover) {
+      const cost = getPrice(ShopItemType.FourLeafClover);
       if (player.stack < cost) return false;
       player.stack -= cost;
       privateState.permanentLuck += 7;
+      privateState.hasFourLeafClover = true;
       return true;
     }
 
-    // Handle Bond — $150 investment, value increases $50/hand
+    // Handle 5 Leaf Clover — lock luck to 77 (one-time)
+    if (itemType === ShopItemType.FiveLeafClover) {
+      const cost = getPrice(ShopItemType.FiveLeafClover);
+      if (player.stack < cost) return false;
+      player.stack -= cost;
+      privateState.hasFiveLeafClover = true;
+      return true;
+    }
+
+    // Handle Bond — random-priced investment, value grows 10%/hand
     if (itemType === ShopItemType.Bond) {
-      const cost = getPrice(ShopItemType.Bond);
+      const slots = this.playerShopSlots.get(playerId) || [];
+      const slot = slots.find(s => s.type === ShopItemType.Bond);
+      const cost = slot?.price ?? getPrice(ShopItemType.Bond);
       if (player.stack < cost) return false;
       player.stack -= cost;
-      privateState.bonds.push({ roundsHeld: 0 });
+      privateState.bonds.push({ roundsHeld: 0, purchasePrice: cost, currentValue: cost });
       return true;
     }
 
-    // Handle Stock Option — $100 investment, cashable after 3 hands
+    // Handle Stock Option — random-priced investment, cashable after 3 hands
     if (itemType === ShopItemType.StockOption) {
-      const cost = getPrice(ShopItemType.StockOption);
+      const slots = this.playerShopSlots.get(playerId) || [];
+      const slot = slots.find(s => s.type === ShopItemType.StockOption);
+      const cost = slot?.price ?? getPrice(ShopItemType.StockOption);
       if (player.stack < cost) return false;
       player.stack -= cost;
-      privateState.stockOptions.push({ roundsHeld: 0 });
+      privateState.stockOptions.push({ roundsHeld: 0, purchasePrice: cost });
       return true;
     }
 
@@ -699,14 +748,12 @@ export class GameManager {
     if (!player || !ps) return { success: false, amount: 0, error: 'Player not found' };
     if (optionIndex < 0 || optionIndex >= ps.stockOptions.length) return { success: false, amount: 0, error: 'Invalid stock option' };
 
-    const option = ps.stockOptions[optionIndex];
-    if (option.roundsHeld < 3) return { success: false, amount: 0, error: 'Must wait 3 hands before cashing out' };
+    const result = getStockOptionCashOutValue(ps.stockOptions[optionIndex]);
+    if (!result.eligible) return { success: false, amount: 0, error: 'Must wait 3 hands before cashing out' };
 
-    // 1 in 3 chance for $500, otherwise $0
-    const value = Math.random() < (1 / 3) ? 500 : 0;
-    player.stack += value;
+    player.stack += result.amount;
     ps.stockOptions.splice(optionIndex, 1);
-    return { success: true, amount: value };
+    return { success: true, amount: result.amount };
   }
 
   playerDisconnected(playerId: number): void {
@@ -745,11 +792,6 @@ export class GameManager {
     }
 
     return false; // Both slots full
-  }
-
-  getPlayerSleeveCard(playerId: number): Card | null {
-    const privateState = this.playerPrivateState.get(playerId);
-    return privateState?.sleeveCard || null;
   }
 
   getPlayerSleeveCards(playerId: number): { sleeveCard: Card | null; sleeveCard2: Card | null } {
@@ -814,28 +856,10 @@ export class GameManager {
 
     const eligible = getEligibleShopItems(privateState);
 
-    // Rarity weights for each item type
-    const itemWeights: Partial<Record<ShopItemType, number>> = {
-      [ShopItemType.CardSleeveUnlock]: 4,   // Uncommon
-      [ShopItemType.ExtraCard]: 6,          // Common
-      [ShopItemType.Joker]: 1,              // Rare
-      [ShopItemType.SleeveExtender]: 1,     // Rare
-      [ShopItemType.XRayGoggles]: 4,        // Uncommon
-      [ShopItemType.Rake]: 4,              // Uncommon
-      [ShopItemType.HiddenCamera]: 4,       // Uncommon
-      [ShopItemType.Gun]: 1,               // Rare
-      [ShopItemType.Bullet]: 6,            // Common
-      [ShopItemType.Cigarette]: 6,         // Common
-      [ShopItemType.Whiskey]: 6,           // Common
-      [ShopItemType.LuckyCharm]: 4,        // Uncommon
-      [ShopItemType.Bond]: 6,             // Common
-      [ShopItemType.StockOption]: 4,       // Uncommon
-    };
-
-    // Build weighted pool
+    // Build weighted pool using shared weight map
     let pool: ShopItemType[] = [];
     for (const type of eligible) {
-      const weight = itemWeights[type] ?? 4;
+      const weight = getItemShopWeight(type);
       for (let i = 0; i < weight; i++) pool.push(type);
     }
 
@@ -866,7 +890,7 @@ export class GameManager {
         price: getPrice(type),
         name: info.name,
         description: info.description,
-        rarity: ShopItemRarity.Common,
+        rarity: getItemRarity(type),
       };
 
       if (type === ShopItemType.ExtraCard) {
@@ -874,35 +898,63 @@ export class GameManager {
         if (card) {
           slot.previewCard = card;
           slot.price = getCardPrice(card);
-          slot.rarity = ShopItemRarity.Common;
+          // Aces are uncommon; all other ranks are common
+          slot.rarity = card.rank === Rank.Ace ? ShopItemRarity.Uncommon : ShopItemRarity.Common;
         }
-      } else if (type === ShopItemType.CardSleeveUnlock) {
-        slot.rarity = ShopItemRarity.Uncommon;
-      } else if (type === ShopItemType.Joker) {
-        slot.rarity = ShopItemRarity.Rare;
-      } else if (type === ShopItemType.Rake) {
-        slot.rarity = ShopItemRarity.Uncommon;
-      } else if (type === ShopItemType.SleeveExtender) {
-        slot.rarity = ShopItemRarity.Rare;
-      } else if (type === ShopItemType.Gun) {
-        slot.rarity = ShopItemRarity.Rare;
-      } else if (type === ShopItemType.XRayGoggles) {
-        slot.rarity = ShopItemRarity.Uncommon;
-      } else if (type === ShopItemType.HiddenCamera) {
-        slot.rarity = ShopItemRarity.Uncommon;
-      } else if (type === ShopItemType.LuckyCharm) {
-        slot.rarity = ShopItemRarity.Uncommon;
+      }
+
+      // Dynamic random pricing for Bond and StockOption
+      if (type === ShopItemType.Bond) {
+        const randPrice = Math.floor(Math.random() * 16) * 10 + 50; // $50-$200 in $10 steps
+        slot.price = randPrice;
+        slot.description = `Invest $${randPrice}. Value grows 10%/hand (max $1,000 sell).`;
       } else if (type === ShopItemType.StockOption) {
-        slot.rarity = ShopItemRarity.Uncommon;
-      } else if (type === ShopItemType.Bullet || type === ShopItemType.Cigarette || type === ShopItemType.Whiskey || type === ShopItemType.Bond) {
-        slot.rarity = ShopItemRarity.Common;
+        const randPrice = (Math.floor(Math.random() * 10) + 1) * 50; // $50-$500 in $50 steps
+        slot.price = randPrice;
+        slot.description = `Invest $${randPrice}. After 3 hands: 1/3 chance to sell for $${randPrice * 5}.`;
       }
 
       return slot;
     });
 
-    this.playerShopSlots.set(playerId, slots);
-    return slots;
+    // Mark slots that haven't been unlocked yet
+    const slotsWithLock = slots.map((slot, idx) => ({
+      ...slot,
+      locked: idx >= privateState.unlockedShopSlots,
+    }));
+
+    this.playerShopSlots.set(playerId, slotsWithLock);
+    return slotsWithLock;
+  }
+
+  unlockShopSlot(playerId: number): { success: boolean; error?: string } {
+    const player = this.gameState.players.find(p => p.id === playerId);
+    if (!player) return { success: false, error: 'Player not found' };
+
+    const ps = this.playerPrivateState.get(playerId);
+    if (!ps) return { success: false, error: 'State not found' };
+
+    if (ps.unlockedShopSlots >= 3) {
+      return { success: false, error: 'All slots already unlocked' };
+    }
+
+    const cost = ps.unlockedShopSlots === 1 ? 50 : 200; // 2nd slot = $50, 3rd = $200
+    if (player.stack < cost) {
+      return { success: false, error: 'Insufficient funds' };
+    }
+
+    player.stack -= cost;
+    ps.unlockedShopSlots++;
+
+    // Update stored slots to reflect the new unlock
+    const currentSlots = this.playerShopSlots.get(playerId) || [];
+    const updatedSlots = currentSlots.map((slot, idx) => ({
+      ...slot,
+      locked: idx >= ps.unlockedShopSlots,
+    }));
+    this.playerShopSlots.set(playerId, updatedSlots);
+
+    return { success: true };
   }
 
   getShopSlots(playerId: number): ShopSlotItem[] {
@@ -1134,31 +1186,30 @@ export class GameManager {
   }
 
   private isBettingRoundComplete(): boolean {
-    const activePlayers = this.gameState.players.filter(
+    const nonAllIn = this.gameState.players.filter(
       p => p.isSeated && p.isInHand && !p.hasFolded && !p.isAllIn
     );
 
-    if (activePlayers.length <= 1) {
-      return true; // Only one player left
+    // Everyone still active is all-in — board runs itself
+    if (nonAllIn.length === 0) {
+      return true;
     }
 
-    // All active players must have acted at least once
-    const allActed = activePlayers.every(p => this.playersActedThisRound.has(p.id));
-    if (!allActed) {
-      return false;
-    }
-
-    // All active players have matched the current bet
-    const allMatched = activePlayers.every(
+    // All non-all-in players must have matched the current bet
+    const allMatched = nonAllIn.every(
       p => p.committedThisRound === this.gameState.currentBetToMatch
     );
-
     if (!allMatched) {
       return false;
     }
 
-    // If all have acted and matched, round is complete
-    return true;
+    if (this.lastRaiserId === 0) {
+      // No raise this round — ends when every non-all-in player has voluntarily acted
+      return nonAllIn.every(p => this.playersActedThisRound.has(p.id));
+    } else {
+      // After a raise — ends when action returns to the raiser
+      return this.gameState.activePlayerId === this.lastRaiserId;
+    }
   }
 
   private advanceBettingRound(): void {
@@ -1171,8 +1222,8 @@ export class GameManager {
     }
 
     this.gameState.currentBetToMatch = 0;
-    this.lastRaiserId = 0; // Reset for new round
-    this.playersActedThisRound.clear(); // Reset action tracking for new round
+    this.lastRaiserId = 0; // No raise yet in the new round
+    this.playersActedThisRound.clear();
     // NOTE: sleeveSwappedThisRound is intentionally NOT cleared here — once per hand
 
     if (this.gameState.round === BettingRound.Preflop) {
@@ -1190,26 +1241,25 @@ export class GameManager {
       return;
     }
 
-    // Find first non-folded, non-all-in player to act (starting from small blind = dealer+1)
+    // Find first non-folded player to act (includes all-in players so they can use items)
     const dealerIndex = this.gameState.players.findIndex(p => p.id === this.gameState.dealerPlayerId);
     const playerCount = this.gameState.players.length;
     let firstToActId = 0;
     for (let i = 1; i <= playerCount; i++) {
       const candidate = this.gameState.players[(dealerIndex + i) % playerCount];
-      if (candidate.isInHand && !candidate.hasFolded && !candidate.isAllIn) {
+      if (candidate.isInHand && !candidate.hasFolded) {
         firstToActId = candidate.id;
         break;
       }
     }
 
     if (firstToActId === 0) {
-      // All remaining players are all-in — run out the board automatically without betting
+      // No active players remain — advance directly
       this.advanceBettingRound();
       return;
     }
 
     this.gameState.activePlayerId = firstToActId;
-    this.lastRaiserId = firstToActId; // First to act is initial "last raiser"
   }
 
   private dealFlop(): Card[] {
@@ -1219,10 +1269,6 @@ export class GameManager {
   private dealCommunityCard(): Card {
     const raw = this.deck.pop() || { suit: Suit.Clubs, rank: Rank.Two };
     return this.applyLuckToCommunityCard(raw);
-  }
-
-  private dealCard(): Card {
-    return this.deck.pop() || { suit: Suit.Clubs, rank: Rank.Two };
   }
 
   private getNextActivePlayer(fromPlayerId: number): number {
@@ -1235,6 +1281,14 @@ export class GameManager {
     const currentIndex = activePlayers.indexOf(fromPlayerId);
     const nextIndex = (currentIndex + 1) % activePlayers.length;
     return activePlayers[nextIndex];
+  }
+
+  /** Like getNextActivePlayer but uses the full players list order, for preflop seat rotation. Skips eliminated players. */
+  private getNextActivePlayerFromDealer(fromPlayerId: number): number {
+    const seated = this.gameState.players.filter(p => p.isSeated && p.isInHand && !p.isEliminated);
+    if (seated.length === 0) return 0;
+    const idx = seated.findIndex(p => p.id === fromPlayerId);
+    return seated[(idx + 1) % seated.length].id;
   }
 
   private evaluateShowdown(): void {
@@ -1290,6 +1344,13 @@ export class GameManager {
       winners[i].stack += potShare + (i === 0 ? remainder : 0);
     }
 
+    // Eliminate players who are now broke
+    for (const player of this.gameState.players) {
+      if (player.stack === 0 && !player.isEliminated) {
+        player.isEliminated = true;
+      }
+    }
+
     // Transition to showdown phase
     this.gameState.phase = HandPhase.Showdown;
   }
@@ -1321,6 +1382,13 @@ export class GameManager {
     winner.stack += remainingPot;
     this.winnerId = winner.id;
     this.foldedOut = true;
+
+    // Eliminate players who are now broke
+    for (const player of this.gameState.players) {
+      if (player.stack === 0 && !player.isEliminated) {
+        player.isEliminated = true;
+      }
+    }
 
     // Transition to showdown phase (will show simplified winner screen)
     this.gameState.phase = HandPhase.Showdown;

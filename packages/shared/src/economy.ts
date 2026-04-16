@@ -2,12 +2,10 @@ import { Card, Rank, Suit, isJokerCard } from './card.js';
 
 export enum ShopItemType {
   None = 0,
-  BankAccountUnlock = 1,
-  SleeveCard = 10,
-  XrayCharge = 11,
   Cigarette = 12,
   Whiskey = 13,
-  LuckyCharm = 14,
+  FourLeafClover = 14,
+  FiveLeafClover = 15,
   Gun = 20,
   Bullet = 21,
   CardSleeveUnlock = 30,
@@ -23,12 +21,6 @@ export enum ShopItemType {
 
 export enum UseItemType {
   None = 0,
-  DepositToBank = 1,
-  WithdrawFromBank = 2,
-  PeekNextDeckCard = 10,
-  UseSleeveCardReplaceHoleA = 11,
-  UseSleeveCardReplaceHoleB = 12,
-  SmokeCigarette = 20,
   UseSleeveCardSwapHoleA = 21,
   UseSleeveCardSwapHoleB = 22,
   UseSleeveCard2SwapHoleA = 23,
@@ -46,16 +38,17 @@ export interface LuckBuff {
 }
 
 export interface BondState {
-  roundsHeld: number; // increments each hand
+  roundsHeld: number;
+  purchasePrice: number;
+  currentValue: number;
 }
 
 export interface StockOptionState {
-  roundsHeld: number; // increments each hand, cashable at 3+
+  roundsHeld: number;
+  purchasePrice: number;
 }
 
 export interface PlayerPrivateState {
-  hasBankAccount: boolean;
-  bankBalance: number;
   hasGun: boolean;
   bullets: number;
   hasCardSleeveUnlock: boolean;
@@ -70,6 +63,9 @@ export interface PlayerPrivateState {
   cheatedThisHand: boolean;
   bonds: BondState[];
   stockOptions: StockOptionState[];
+  hasFourLeafClover: boolean;
+  hasFiveLeafClover: boolean;
+  unlockedShopSlots: number; // How many shop slots unlocked this visit (default 1, max 3)
 }
 
 export enum ShopItemRarity {
@@ -85,50 +81,70 @@ export interface ShopSlotItem {
   description: string;
   rarity: ShopItemRarity;
   previewCard?: Card; // For ExtraCard only
+  locked?: boolean; // True if slot hasn't been unlocked yet
 }
 
-export const ShopCatalog = {
-  BankAccountUnlock: 250,
-  SleeveCard: 40,
-  XrayCharge: 10,
-  Cigarette: 25,
-  Whiskey: 50,
-  LuckyCharm: 100,
-  Gun: 400,
-  Bullet: 30,
-  CardSleeveUnlock: 200,
-  ExtraCard: 0,
-  Joker: 100,
-  SleeveExtender: 300,
-  XRayGoggles: 150,
-  Rake: 300,
-  HiddenCamera: 150,
-  Bond: 150,
-  StockOption: 100,
-} as const;
+/** Canonical rarity for every purchasable item. Drives both the displayed rarity badge and shop spawn weights. */
+export const ITEM_RARITY_MAP: Record<ShopItemType, ShopItemRarity> = {
+  [ShopItemType.None]:             ShopItemRarity.Common,
+  [ShopItemType.Cigarette]:        ShopItemRarity.Common,
+  [ShopItemType.Whiskey]:          ShopItemRarity.Common,
+  [ShopItemType.FourLeafClover]:   ShopItemRarity.Uncommon,
+  [ShopItemType.FiveLeafClover]:   ShopItemRarity.Rare,
+  [ShopItemType.Gun]:              ShopItemRarity.Rare,
+  [ShopItemType.Bullet]:           ShopItemRarity.Common,
+  [ShopItemType.CardSleeveUnlock]: ShopItemRarity.Uncommon,
+  [ShopItemType.ExtraCard]:        ShopItemRarity.Common,
+  [ShopItemType.Joker]:            ShopItemRarity.Rare,
+  [ShopItemType.SleeveExtender]:   ShopItemRarity.Rare,
+  [ShopItemType.XRayGoggles]:      ShopItemRarity.Common,
+  [ShopItemType.Rake]:             ShopItemRarity.Rare,
+  [ShopItemType.HiddenCamera]:     ShopItemRarity.Uncommon,
+  [ShopItemType.Bond]:             ShopItemRarity.Common,
+  [ShopItemType.StockOption]:      ShopItemRarity.Uncommon,
+};
+
+export function getItemRarity(type: ShopItemType): ShopItemRarity {
+  return ITEM_RARITY_MAP[type] ?? ShopItemRarity.Common;
+}
+
+/**
+ * Shop spawn weight derived directly from rarity.
+ * To adjust how often an item appears in the shop, change its entry in ITEM_RARITY_MAP.
+ *   Rare     → 1  (low spawn chance)
+ *   Uncommon → 4
+ *   Common   → 6  (high spawn chance)
+ */
+export function getItemShopWeight(type: ShopItemType): number {
+  switch (getItemRarity(type)) {
+    case ShopItemRarity.Rare:     return 1;
+    case ShopItemRarity.Uncommon: return 4;
+    case ShopItemRarity.Common:   return 6;
+  }
+}
+
+/** Single source of truth for item base prices. getPrice reads from this. */
+export const ShopCatalog: Record<ShopItemType, number> = {
+  [ShopItemType.None]:             Infinity,
+  [ShopItemType.Cigarette]:        25,
+  [ShopItemType.Whiskey]:          30,
+  [ShopItemType.FourLeafClover]:   77,
+  [ShopItemType.FiveLeafClover]:   333,
+  [ShopItemType.Gun]:              400,
+  [ShopItemType.Bullet]:           25,
+  [ShopItemType.CardSleeveUnlock]: 200,
+  [ShopItemType.ExtraCard]:        0,
+  [ShopItemType.Joker]:            100,
+  [ShopItemType.SleeveExtender]:   300,
+  [ShopItemType.XRayGoggles]:      80,
+  [ShopItemType.Rake]:             200,
+  [ShopItemType.HiddenCamera]:     150,
+  [ShopItemType.Bond]:             150,
+  [ShopItemType.StockOption]:      100,
+};
 
 export function getPrice(item: ShopItemType): number {
-  const prices: Record<ShopItemType, number> = {
-    [ShopItemType.None]: Infinity,
-    [ShopItemType.BankAccountUnlock]: 250,
-    [ShopItemType.SleeveCard]: 40,
-    [ShopItemType.XrayCharge]: 10,
-    [ShopItemType.Cigarette]: 25,
-    [ShopItemType.Whiskey]: 50,
-    [ShopItemType.LuckyCharm]: 100,
-    [ShopItemType.Gun]: 400,
-    [ShopItemType.Bullet]: 30,
-    [ShopItemType.CardSleeveUnlock]: 200,
-    [ShopItemType.ExtraCard]: 0,
-    [ShopItemType.Joker]: 100,
-    [ShopItemType.SleeveExtender]: 300,
-    [ShopItemType.XRayGoggles]: 150,
-    [ShopItemType.Rake]: 300,
-    [ShopItemType.HiddenCamera]: 150,
-    [ShopItemType.Bond]: 150,
-    [ShopItemType.StockOption]: 100,
-  };
-  return prices[item];
+  return ShopCatalog[item];
 }
 
 export function getCardPrice(card: Card): number {
@@ -147,12 +163,10 @@ export function getCardPrice(card: Card): number {
 export function getShopItemInfo(type: ShopItemType): { name: string; description: string } {
   const info: Record<ShopItemType, { name: string; description: string }> = {
     [ShopItemType.None]: { name: '', description: '' },
-    [ShopItemType.BankAccountUnlock]: { name: 'Bank Account', description: 'Unlock a bank account' },
-    [ShopItemType.SleeveCard]: { name: 'Sleeve Card', description: 'A card for your sleeve' },
-    [ShopItemType.XrayCharge]: { name: 'X-Ray Charge', description: 'Peek at the next deck card' },
     [ShopItemType.Cigarette]: { name: 'Cigarette', description: '+5 luck for 5 hands' },
     [ShopItemType.Whiskey]: { name: 'Whiskey', description: '+10 luck for 3 hands' },
-    [ShopItemType.LuckyCharm]: { name: 'Lucky Charm', description: 'Permanently +7 luck' },
+    [ShopItemType.FourLeafClover]: { name: '4 Leaf Clover', description: 'Permanently +7 luck (one-time)' },
+    [ShopItemType.FiveLeafClover]: { name: '5 Leaf Clover', description: 'Set luck to 77 permanently. Cigarettes and whiskey have no further effect.' },
     [ShopItemType.Gun]: { name: 'Gun', description: 'For use on dirty cheaters' },
     [ShopItemType.Bullet]: { name: 'Bullet', description: 'You show those dirty cheaters who they\'re messing with' },
     [ShopItemType.CardSleeveUnlock]: { name: 'Card Sleeve Unlock', description: 'A spot to hide a card in your sleeve' },
@@ -162,8 +176,8 @@ export function getShopItemInfo(type: ShopItemType): { name: string; description
     [ShopItemType.XRayGoggles]: { name: 'X-Ray Goggles', description: 'Peek at the next community card (+3 charges)' },
     [ShopItemType.Rake]: { name: 'Rake', description: 'Secretly take 5% of every pot' },
     [ShopItemType.HiddenCamera]: { name: 'Hidden Camera', description: 'See one of an opponent\'s hole cards (+3 charges)' },
-    [ShopItemType.Bond]: { name: 'Bond', description: 'Invest $150. Cash out value increases by $50 each hand' },
-    [ShopItemType.StockOption]: { name: 'Stock Option', description: 'Invest $100. After 3 hands: 1/3 chance for $500, 2/3 chance for $0' },
+    [ShopItemType.Bond]: { name: 'Bond', description: 'Invest at a random price. Value grows 10%/hand up to $1,000.' },
+    [ShopItemType.StockOption]: { name: 'Stock Option', description: 'Invest at a random price. After 3 hands: 1/3 chance for 5x return.' },
   };
   return info[type];
 }
@@ -200,43 +214,37 @@ export function getEligibleShopItems(state: PlayerPrivateState): ShopItemType[] 
   items.push(ShopItemType.XRayGoggles);
   items.push(ShopItemType.HiddenCamera);
 
-  // Luck items (always available, stackable)
-  items.push(ShopItemType.Cigarette);
-  items.push(ShopItemType.Whiskey);
-  items.push(ShopItemType.LuckyCharm);
+  // Luck items — cigarette/whiskey blocked if player has 5 Leaf Clover
+  if (!state.hasFiveLeafClover) {
+    items.push(ShopItemType.Cigarette);
+    items.push(ShopItemType.Whiskey);
+  }
+  if (!state.hasFourLeafClover && getTotalLuck(state) >= 5) items.push(ShopItemType.FourLeafClover);
+  if (state.hasFourLeafClover && !state.hasFiveLeafClover) items.push(ShopItemType.FiveLeafClover);
 
-  // Investment items (always available, can own multiple)
-  items.push(ShopItemType.Bond);
-  items.push(ShopItemType.StockOption);
+  // Investment items — only 1 of each at a time; repurchasable after cashing out
+  if (state.bonds.length === 0) items.push(ShopItemType.Bond);
+  if (state.stockOptions.length === 0) items.push(ShopItemType.StockOption);
 
   return items;
 }
 
-export function isStackable(item: ShopItemType): boolean {
-  const stackableItems = [
-    ShopItemType.SleeveCard,
-    ShopItemType.XrayCharge,
-    ShopItemType.Cigarette,
-    ShopItemType.Bullet,
-  ];
-  return stackableItems.includes(item);
-}
-
-export function requiresGunForBullets(item: ShopItemType): boolean {
-  return item === ShopItemType.Bullet;
-}
-
 export function getTotalLuck(state: PlayerPrivateState): number {
+  if (state.hasFiveLeafClover) return 77;
   const buffLuck = state.luckBuffs.reduce((sum, b) => sum + b.amount, 0);
   return state.permanentLuck + buffLuck;
 }
 
 export function getBondCashOutValue(bond: BondState): number {
-  return 150 + 50 * bond.roundsHeld;
+  return bond.currentValue;
 }
 
-export function getStockOptionCashOutValue(option: StockOptionState): number | null {
-  if (option.roundsHeld < 3) return null; // Not yet cashable
-  // 1 in 3 chance for $500, otherwise $0 — value is resolved at cash-out time
-  return null; // Resolved dynamically
+/**
+ * Resolves a stock option cash-out. Returns { eligible: false } if not yet cashable.
+ * The 1-in-3 roll is performed here so the resolution rule stays in one place.
+ */
+export function getStockOptionCashOutValue(option: StockOptionState): { eligible: boolean; amount: number } {
+  if (option.roundsHeld < 3) return { eligible: false, amount: 0 };
+  const amount = Math.random() < 1 / 3 ? option.purchasePrice * 5 : 0;
+  return { eligible: true, amount };
 }

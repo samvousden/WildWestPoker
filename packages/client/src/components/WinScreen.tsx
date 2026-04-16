@@ -2,7 +2,7 @@ import React from 'react';
 import { useGame } from '../context/GameContext';
 
 export const WinScreen: React.FC = () => {
-  const { gameState, playerId } = useGame();
+  const { gameState, playerId, leaveTable } = useGame();
 
   if (!gameState) return null;
 
@@ -27,6 +27,7 @@ export const WinScreen: React.FC = () => {
               </div>
             ))}
         </div>
+        <button className="leave-btn" onClick={leaveTable}>Back to Lobby</button>
       </div>
     </div>
   );

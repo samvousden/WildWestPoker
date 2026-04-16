@@ -1228,3 +1228,20 @@
 .crown {
   font-size: 1.2em;
 }
+
+.leave-btn {
+  margin-top: 28px;
+  padding: 10px 32px;
+  background: #444;
+  color: #ccc;
+  border: 1px solid #666;
+  border-radius: 8px;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.leave-btn:hover {
+  background: #555;
+  color: #fff;
+  border-color: #888;
+}

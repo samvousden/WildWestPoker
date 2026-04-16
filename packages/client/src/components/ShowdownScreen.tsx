@@ -1,10 +1,8 @@
 import React, { useMemo } from 'react';
 import { useGame } from '../context/GameContext';
-import { cardToString, Suit, evaluateBestHandWithCards, getHandRankingName } from '@poker/shared';
-
-const isRedCard = (suit: Suit): boolean => {
-  return suit === Suit.Hearts || suit === Suit.Diamonds;
-};
+import { evaluateBestHandWithCards, getHandRankingName } from '@poker/shared';
+import { CardDisplay } from './CardDisplay';
+import { CommunityCards } from './CommunityCards';
 
 export const ShowdownScreen: React.FC = () => {
   const { gameState, playerId, allPlayerCards, winnerId, winnerIds, foldedOut, setReady, hasGun, bullets, shootPlayer, shotFiredEvent } = useGame();
@@ -46,25 +44,14 @@ export const ShowdownScreen: React.FC = () => {
 
       {!foldedOut && (
         <>
-          <div className="community-cards-display">
-            <h3>Community Cards</h3>
-            <div className="cards">
-              {gameState.board.map((card, i) => (
-                <div key={i} className={`card ${isRedCard(card.suit) ? 'red-card' : ''}`}>
-                  {cardToString(card)}
-                </div>
-              ))}
-            </div>
-          </div>
+          <CommunityCards cards={gameState.board} />
 
           {winningHand && (
             <div className="winning-hand-display">
               <h3>{getHandRankingName(winningHand.ranking)}</h3>
               <div className="cards">
                 {winningHand.cards.map((card, i) => (
-                  <div key={i} className={`card ${isRedCard(card.suit) ? 'red-card' : ''}`}>
-                    {cardToString(card)}
-                  </div>
+                  <CardDisplay key={i} card={card} mode="string" />
                 ))}
               </div>
             </div>
@@ -80,9 +67,7 @@ export const ShowdownScreen: React.FC = () => {
                   <h4>{player.name}</h4>
                   <div className="hole-cards-display">
                     {allPlayerCards?.get(player.id)!.map((card, i) => (
-                      <div key={i} className={`card hole-card ${isRedCard(card.suit) ? 'red-card' : ''}`}>
-                        {cardToString(card)}
-                      </div>
+                      <CardDisplay key={i} card={card} className="hole-card" mode="string" />
                     ))}
                   </div>
                   <p className="stack-info">Stack: ${player.stack}</p>

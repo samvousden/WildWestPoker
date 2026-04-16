@@ -1,8 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
-import { Card, cardToDisplayString, ShopItemType, ShopItemRarity, ShopSlotItem } from '@poker/shared';
+import { Card, ShopItemType, ShopSlotItem } from '@poker/shared';
+import { ShopSlot } from './ShopSlot';
 
 const REFRESH_SHOP_COST = 50;
+const SLOT_UNLOCK_COSTS = [0, 50, 200] as const; // index = slot position
 
 export const ItemShop: React.FC = () => {
   const { gameState, socket, playerId, setReady } = useGame();
@@ -34,6 +36,17 @@ export const ItemShop: React.FC = () => {
   const handleContinue = () => {
     setReady(true);
   };
+
+  const handleUnlockSlot = useCallback((slotIndex: number) => {
+    if (!socket || !playerId) return;
+    socket.emit('unlock-shop-slot', playerId, (response: any) => {
+      if (response.success) {
+        setShopSlots(response.slots);
+      } else {
+        alert(response.error || 'Cannot unlock slot');
+      }
+    });
+  }, [socket, playerId]);
 
   const handleRefreshShop = useCallback(() => {
     if (!socket || !playerId) return;
@@ -71,74 +84,6 @@ export const ItemShop: React.FC = () => {
     }
   }, [socket, playerId]);
 
-  const renderSlot = (slot: ShopSlotItem, index: number) => {
-    const bought = boughtIndices.has(index);
-    const canAfford = (currentPlayer?.stack || 0) >= slot.price;
-    const rarityLabel = slot.rarity === ShopItemRarity.Rare ? 'Rare'
-      : slot.rarity === ShopItemRarity.Uncommon ? 'Uncommon'
-      : 'Common';
-
-    return (
-      <div key={index} className={`item-slot${bought ? ' item-slot-bought' : ''}`}>
-        <div className="item-card">
-          <div className="item-card-header">
-            <h3>{slot.name}</h3>
-            <span className={`rarity-badge rarity-${slot.rarity}`}>{rarityLabel}</span>
-          </div>
-          <p className="item-description">{slot.description}</p>
-
-          {slot.type === ShopItemType.ExtraCard ? (
-            slot.previewCard ? (
-              <>
-                <div className="card-preview">
-                  <div className="card-display">
-                    <span className="card-name">{cardToDisplayString(slot.previewCard)}</span>
-                  </div>
-                  <p className="item-price">${slot.price}</p>
-                </div>
-                <button
-                  className="buy-btn"
-                  onClick={() => handleBuyItem(slot.type, index, slot.previewCard!)}
-                  disabled={bought || !canAfford}
-                >
-                  {bought ? 'Purchased' : canAfford ? 'Buy This Card' : 'Insufficient Funds'}
-                </button>
-              </>
-            ) : (
-              <p className="item-price">$30-$50</p>
-            )
-          ) : slot.type === ShopItemType.Joker ? (
-            <>
-              <div className="card-preview joker-preview">
-                <div className="card-display joker-display">
-                  <span className="card-name">🃏</span>
-                </div>
-                <p className="item-price">${slot.price}</p>
-              </div>
-              <button
-                className="buy-btn"
-                onClick={() => handleBuyItem(slot.type, index)}
-                disabled={bought || !canAfford}
-              >
-                {bought ? 'Purchased' : canAfford ? 'Buy' : 'Insufficient Funds'}
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="item-price">${slot.price}</p>
-              <button
-                className="buy-btn"
-                onClick={() => handleBuyItem(slot.type, index)}
-                disabled={bought || !canAfford}
-              >
-                {bought ? 'Purchased' : canAfford ? 'Buy' : 'Insufficient Funds'}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    );
-  };
 
   return (
     <div className="item-shop">
@@ -155,7 +100,19 @@ export const ItemShop: React.FC = () => {
         ) : shopSlots.length === 0 ? (
           <div className="shop-empty">No items available</div>
         ) : (
-          shopSlots.map((slot, i) => renderSlot(slot, i))
+          shopSlots.map((slot, i) => (
+            <ShopSlot
+              key={i}
+              slot={slot}
+              index={i}
+              bought={boughtIndices.has(i)}
+              canAfford={(currentPlayer?.stack || 0) >= slot.price}
+              onBuy={handleBuyItem}
+              onUnlock={() => handleUnlockSlot(i)}
+              unlockCost={SLOT_UNLOCK_COSTS[i]}
+              canAffordUnlock={(currentPlayer?.stack || 0) >= SLOT_UNLOCK_COSTS[i]}
+            />
+          ))
         )}
       </div>
 

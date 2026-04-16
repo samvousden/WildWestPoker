@@ -1,55 +1,19 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { useGame } from '../context/GameContext';
-import { PokerActionType, cardToString, cardToDisplayString, Suit, UseItemType, isJokerCard, getBondCashOutValue } from '@poker/shared';
-
-const isRedCard = (suit: Suit): boolean => {
-  return suit === Suit.Hearts || suit === Suit.Diamonds;
-};
-
-const formatLastAction = (lastAction?: { type: number; amount?: number }): string => {
-  if (!lastAction) return '';
-  
-  switch (lastAction.type) {
-    case PokerActionType.Fold:
-      return 'Fold';
-    case PokerActionType.Check:
-      return 'Check';
-    case PokerActionType.Call:
-      return `Call${lastAction.amount ? `: $${lastAction.amount}` : ''}`;
-    case PokerActionType.RaiseTo:
-      return `Raise: $${lastAction.amount}`;
-    default:
-      return '';
-  }
-};
+import { CardDisplay } from './CardDisplay';
+import { PlayerSeat } from './PlayerSeat';
+import { CommunityCards } from './CommunityCards';
+import { ActionPanel } from './ActionPanel';
+import { SleeveSection } from './SleeveSection';
+import { ItemsPanel } from './ItemsPanel';
+import { InvestmentsPanel } from './InvestmentsPanel';
 
 export const GameBoard: React.FC = () => {
-  const { gameState, playerId, holeCards, sleeveCard, sleeveCard2, sleeveUsedThisHand, useItem, submitAction, xrayCharges, hiddenCameraCharges, revealedCards, peekedCard, useXRay, useHiddenCamera, bonds, stockOptions, totalLuck, luckBuffs, cashOutBond, cashOutStockOption } = useGame();
-  const [raiseAmount, setRaiseAmount] = useState<string>('');
+  const { gameState, playerId, holeCards } = useGame();
 
   if (!gameState || !playerId) {
     return <div>Loading...</div>;
   }
-
-  const currentPlayer = gameState.players.find(p => p.id === playerId);
-  const minRaise = gameState.currentBetToMatch + 10;
-  const canSwap = gameState.activePlayerId === playerId && !currentPlayer?.isAllIn && !sleeveUsedThisHand && (sleeveCard !== null || sleeveCard2 !== null);
-  const canCheck = currentPlayer ? gameState.currentBetToMatch === currentPlayer.committedThisRound : false;
-
-  const handleRaise = () => {
-    const amount = parseInt(raiseAmount, 10);
-    if (!isNaN(amount) && amount >= minRaise && currentPlayer && amount <= currentPlayer.stack + (gameState.currentBetToMatch - currentPlayer.committedThisRound)) {
-      submitAction({ type: PokerActionType.RaiseTo, raiseToAmount: amount });
-      setRaiseAmount('');
-    }
-  };
-
-  const handleRaiseInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setRaiseAmount(minRaise.toString());
-    }
-  };
 
   return (
     <div className="game-board">
@@ -62,10 +26,7 @@ export const GameBoard: React.FC = () => {
         {holeCards && holeCards.length > 0 ? (
           <div className="hole-cards">
             {holeCards.map((card, i) => (
-              <div key={i} className={`card hole-card ${isJokerCard(card) ? 'joker-card' : isRedCard(card.suit) ? 'red-card' : ''} ${card.improved ? 'improved-card' : ''}`}>
-                {cardToDisplayString(card)}
-                {card.improved && <span className="gold-sticker">★</span>}
-              </div>
+              <CardDisplay key={i} card={card} className="hole-card" mode="display" />
             ))}
           </div>
         ) : (
@@ -73,203 +34,24 @@ export const GameBoard: React.FC = () => {
         )}
       </div>
 
-      {sleeveCard && (
-        <div className="sleeve-card-section">
-          <h3>Card Sleeve</h3>
-          <div className="sleeve-card-display">
-            <div className={`card sleeve-card ${isJokerCard(sleeveCard) ? 'joker-card' : isRedCard(sleeveCard.suit) ? 'red-card' : ''}`}>
-              {cardToDisplayString(sleeveCard)}
-            </div>
-          </div>
-          {canSwap && holeCards && holeCards.length === 2 && (
-            <div className="swap-buttons">
-              <button 
-                className="swap-btn"
-                onClick={() => useItem(UseItemType.UseSleeveCardSwapHoleA)}
-              >
-                Swap with {cardToDisplayString(holeCards[0])}
-              </button>
-              <button 
-                className="swap-btn"
-                onClick={() => useItem(UseItemType.UseSleeveCardSwapHoleB)}
-              >
-                Swap with {cardToDisplayString(holeCards[1])}
-              </button>
-            </div>
-          )}
-          {!canSwap && sleeveCard && (
-            <p className="swap-disabled-msg">{sleeveUsedThisHand ? 'Already used this hand' : 'Swaps only allowed on your turn'}</p>
-          )}
-        </div>
-      )}
+      <SleeveSection />
+      <ItemsPanel />
+      <InvestmentsPanel />
 
-      {sleeveCard2 && (
-        <div className="sleeve-card-section">
-          <h3>Card Sleeve (Slot 2)</h3>
-          <div className="sleeve-card-display">
-            <div className={`card sleeve-card ${isJokerCard(sleeveCard2) ? 'joker-card' : isRedCard(sleeveCard2.suit) ? 'red-card' : ''}`}>
-              {cardToDisplayString(sleeveCard2)}
-            </div>
-          </div>
-          {canSwap && holeCards && holeCards.length === 2 && (
-            <div className="swap-buttons">
-              <button 
-                className="swap-btn"
-                onClick={() => useItem(UseItemType.UseSleeveCard2SwapHoleA)}
-              >
-                Swap with {cardToDisplayString(holeCards[0])}
-              </button>
-              <button 
-                className="swap-btn"
-                onClick={() => useItem(UseItemType.UseSleeveCard2SwapHoleB)}
-              >
-                Swap with {cardToDisplayString(holeCards[1])}
-              </button>
-            </div>
-          )}
-          {!canSwap && sleeveCard2 && (
-            <p className="swap-disabled-msg">{sleeveUsedThisHand ? 'Already used this hand' : 'Swaps only allowed on your turn'}</p>
-          )}
-        </div>
-      )}
-
-      {(xrayCharges > 0 || peekedCard !== null || hiddenCameraCharges > 0 || revealedCards.size > 0) && (
-        <div className="items-section">
-          {(xrayCharges > 0 || peekedCard !== null) && (
-            <div className="item-action">
-              <button className="item-use-btn xray-btn" onClick={useXRay} disabled={xrayCharges <= 0}>
-                🔍 X-Ray ({xrayCharges})
-              </button>
-              {peekedCard && (
-                <span className="peeked-card">
-                  Next card: <span className={`card-inline ${isRedCard(peekedCard.suit) ? 'red-card-text' : ''}`}>{cardToString(peekedCard)}</span>
-                </span>
-              )}
-            </div>
-          )}
-          {(hiddenCameraCharges > 0 || revealedCards.size > 0) && (
-            <div className="item-action">
-              <span className="camera-label">📷 Camera ({hiddenCameraCharges}):</span>
-              {gameState.players
-                .filter(p => p.id !== playerId && p.isInHand && !p.hasFolded)
-                .map(p => (
-                  <button
-                    key={p.id}
-                    className="item-use-btn camera-btn"
-                    onClick={() => useHiddenCamera(p.id)}
-                    disabled={hiddenCameraCharges <= 0 || revealedCards.has(p.id)}
-                  >
-                    {revealedCards.has(p.id)
-                      ? `${p.name}: ${cardToString(revealedCards.get(p.id)!)}`
-                      : p.name}
-                  </button>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {(totalLuck > 0 || bonds.length > 0 || stockOptions.length > 0) && (
-        <div className="investments-section">
-          {totalLuck > 0 && (
-            <div className="luck-display">
-              🍀 Luck: {totalLuck}
-              {luckBuffs.length > 0 && (
-                <span className="luck-buffs">
-                  {luckBuffs.map((b, i) => (
-                    <span key={i} className="luck-buff-tag">+{b.amount} ({b.turnsRemaining}h)</span>
-                  ))}
-                </span>
-              )}
-            </div>
-          )}
-          {bonds.length > 0 && (
-            <div className="bonds-display">
-              {bonds.map((bond, i) => (
-                <div key={i} className="investment-item bond-item">
-                  <span>📄 Bond: ${getBondCashOutValue(bond)}</span>
-                  <button className="cashout-btn" onClick={() => cashOutBond(i)}>Cash Out</button>
-                </div>
-              ))}
-            </div>
-          )}
-          {stockOptions.length > 0 && (
-            <div className="stocks-display">
-              {stockOptions.map((opt, i) => (
-                <div key={i} className="investment-item stock-item">
-                  <span>📈 Stock: {opt.roundsHeld >= 3 ? 'Ready!' : `${3 - opt.roundsHeld} hands left`}</span>
-                  <button className="cashout-btn" onClick={() => cashOutStockOption(i)} disabled={opt.roundsHeld < 3}>
-                    {opt.roundsHeld >= 3 ? 'Cash Out (1/3 → $500)' : 'Waiting...'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div className="board-cards">
-        <h3>Community Cards</h3>
-        <div className="cards">
-          {gameState.board.map((card, i) => (
-            <div key={i} className={`card ${isRedCard(card.suit) ? 'red-card' : ''} ${card.improved ? 'improved-card' : ''}`}>
-              {cardToString(card)}
-              {card.improved && <span className="gold-sticker">★</span>}
-            </div>
-          ))}
-        </div>
-      </div>
+      <CommunityCards cards={gameState.board} />
 
       <div className="players-table">
         {gameState.players.map(player => (
-          <div key={player.id} className={`player-seat ${player.id === playerId ? 'is-you' : ''} ${player.id === gameState.activePlayerId ? 'active-player' : ''} ${player.isEliminated ? 'eliminated' : ''}`}>
-            {player.id === gameState.activePlayerId && <div className="active-indicator">●</div>}
-            <h4>{player.name}</h4>
-            {player.isEliminated ? (
-              <p className="stack-eliminated">Eliminated</p>
-            ) : (
-              <p>Stack: ${player.stack}</p>
-            )}
-            {player.lastAction && !player.isEliminated && (
-              <p className="last-action">{formatLastAction(player.lastAction)}</p>
-            )}
-            {player.isReady && <span className="badge ready">Ready</span>}
-            {player.hasFolded && <span className="badge folded">Folded</span>}
-            {player.isAllIn && <span className="badge all-in">All In</span>}
-            {player.isEliminated && <span className="badge eliminated-badge">☠️ Out</span>}
-          </div>
+          <PlayerSeat
+            key={player.id}
+            player={player}
+            isYou={player.id === playerId}
+            isActive={player.id === gameState.activePlayerId}
+          />
         ))}
       </div>
 
-      {currentPlayer && gameState.activePlayerId === playerId && (
-        <div className="action-panel">
-          <h3>Your Turn</h3>
-          <button onClick={() => submitAction({ type: PokerActionType.Fold })}>
-            Fold
-          </button>
-          <button 
-            onClick={() => submitAction({ type: PokerActionType.Check })}
-            disabled={!canCheck}
-          >
-            Check
-          </button>
-          <button onClick={() => submitAction({ type: PokerActionType.Call })}>
-            Call ${gameState.currentBetToMatch - currentPlayer.committedThisRound}
-          </button>
-          <div className="raise-input">
-            <input
-              type="number"
-              placeholder={`Raise to (min $${minRaise})...`}
-              value={raiseAmount}
-              onChange={e => setRaiseAmount(e.target.value)}
-              onKeyDown={handleRaiseInputKeyDown}
-            />
-            <button onClick={handleRaise}>
-              Raise
-            </button>
-          </div>
-        </div>
-      )}
+      <ActionPanel />
 
       <div className="game-info">
         <p>Phase: {gameState.phase}</p>
