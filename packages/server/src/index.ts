@@ -25,7 +25,7 @@ let lastGamePhase = 0; // Track last phase to detect showdown
 async function executeBotTurns(): Promise<void> {
   const BOT_DELAY_MS = 1000; // 1 second
   let iterations = 0; // Prevent infinite loops
-  const MAX_ITERATIONS = 20; // Safety limit
+  const MAX_ITERATIONS = 100; // Safety limit (enough for raises across all 4 streets)
   
   let currentState = gameManager.getGameState();
   
@@ -76,6 +76,15 @@ async function executeBotTurns(): Promise<void> {
       console.log(`[Bot] ${activePlayer.name} thinking...`);
       await new Promise(resolve => setTimeout(resolve, BOT_DELAY_MS));
       
+    // Execute item rules (e.g., cash out stock option) before betting action
+      const usedItem = gameManager.executeBotItemRules(activePlayer.id);
+      if (usedItem) {
+        currentState = gameManager.getGameState();
+        io.emit('game-state-updated', currentState);
+        console.log(`[Bot] ${activePlayer.name} used an item (rule triggered)`);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
       const botAction = gameManager.getBotAction(activePlayer.id);
       const actionName = botAction.type === 1 ? 'CHECK' : botAction.type === 2 ? 'CALL' : 'UNKNOWN';
       console.log(`[Bot] ${activePlayer.name} ${actionName}`);
@@ -167,6 +176,7 @@ io.on('connection', (socket) => {
   socket.on('play-vs-bots', (playerName: string, callback) => {
     const playerId = gameManager.playVsBots(playerName);
     playerSessions.set(socket.id, playerId);
+    lastGamePhase = 0;
 
     console.log(`Player ${playerName} (ID: ${playerId}) started game vs bots`);
 

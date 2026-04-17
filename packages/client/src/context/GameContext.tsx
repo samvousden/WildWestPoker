@@ -156,7 +156,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!socket) return false;
 
       return new Promise(resolve => {
-        socket.emit('join-table', playerName, ({ playerId: pid, success }) => {
+        socket.emit('join-table', playerName, ({ playerId: pid, success }: { playerId: number; success: boolean }) => {
           if (success) {
             setPlayerId(pid);
             resolve(pid);
@@ -174,9 +174,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!socket) return false;
 
       return new Promise(resolve => {
-        socket.emit('play-vs-bots', playerName, ({ playerId: pid, success }) => {
+        socket.emit('play-vs-bots', playerName, ({ playerId: pid, success }: { playerId: number; success: boolean }) => {
           if (success) {
             setPlayerId(pid);
+            // Reset all local game state so nothing from a previous game carries over
+            setHoleCards(null);
+            setSleeveCard(null);
+            setSleeveCard2(null);
+            setSleeveUsedThisHand(false);
+            setAllPlayerCards(null);
+            setWinnerId(null);
+            setWinnerIds([]);
+            setFoldedOut(false);
+            setXrayCharges(0);
+            setHiddenCameraCharges(0);
+            setRevealedCards(new Map());
+            setPeekedCard(null);
+            setHasGun(false);
+            setBullets(0);
+            setShotFiredEvent(null);
+            setBonds([]);
+            setStockOptions([]);
+            setTotalLuck(0);
+            setLuckBuffs([]);
             resolve(pid);
           } else {
             resolve(false);
@@ -218,7 +238,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!socket || !playerId) return false;
 
       return new Promise(resolve => {
-        socket.emit('submit-action', playerId, action, ({ success }) => {
+        socket.emit('submit-action', playerId, action, ({ success }: { success: boolean }) => {
           resolve(success || false);
         });
       });

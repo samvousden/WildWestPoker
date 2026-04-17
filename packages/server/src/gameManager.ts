@@ -10,6 +10,8 @@ import {
   Rank,
   evaluateBestHand,
   evaluateBestHandWithJokers,
+  evaluateFiveCardHand,
+  HandRanking,
   ItemType,
   PlayerPrivateState,
   ShopItemType,
@@ -28,6 +30,9 @@ import {
   getTotalLuck,
   getBondCashOutValue,
   getStockOptionCashOutValue,
+  BotProfile,
+  BotItemRule,
+  DEFAULT_BOT_PROFILES,
 } from '@poker/shared';
 
 /**
@@ -39,6 +44,9 @@ export class GameManager {
   private holeCards: Map<number, [Card, Card]> = new Map();
   private playerPrivateState: Map<number, PlayerPrivateState> = new Map();
   private playerShopSlots: Map<number, ShopSlotItem[]> = new Map();
+  private botProfiles: Map<number, BotProfile> = new Map();
+  private botHandCounts: Map<number, number> = new Map();
+  private botItemRulesFiredThisHand: Set<number> = new Set();
   private deck: Card[] = [];
   private lastRaiserId: number = 0; // Id of last player to voluntarily bet/raise (0 = no raise yet this round)
   private playersActedThisRound: Set<number> = new Set(); // Tracks who has voluntarily acted; cleared for non-all-in on raise
@@ -92,16 +100,236 @@ export class GameManager {
       throw new Error('Player is not a bot');
     }
 
-    // For now, bots always call or check
+    const profile = this.botProfiles.get(botId);
     const currentBet = this.gameState.currentBetToMatch;
     const playerCommitted = bot.committedThisRound;
 
-    if (currentBet === playerCommitted) {
-      // Can check
-      return { type: PokerActionType.Check };
+    // Fallback for bots without a profile (check / call only)
+    if (!profile) {
+      return currentBet === playerCommitted
+        ? { type: PokerActionType.Check }
+        : { type: PokerActionType.Call };
+    }
+
+    const { strategy } = profile;
+    const holeCards = this.holeCards.get(botId);
+    const board = this.gameState.board;
+    const facingRaise = currentBet > playerCommitted;
+    const isPreflop = board.length === 0;
+
+    // ── Compute hand strength ──────────────────────────────────────────────
+    let strength = 20; // default if hole cards unavailable
+    let ranking: HandRanking = HandRanking.HighCard;
+
+    if (holeCards) {
+      if (isPreflop) {
+        strength = this.getPreflopStrength(holeCards[0], holeCards[1]);
+      } else {
+        ranking = this.getPostflopRanking(holeCards, board);
+        strength = Math.round((ranking / 9) * 100);
+      }
+    }
+
+    // ── Bluff roll ─────────────────────────────────────────────────────────
+    const isBluffing = Math.random() < strategy.bluffFrequency;
+    const effectiveStrength = isBluffing ? 100 : strength;
+    const effectiveRanking: HandRanking = isBluffing ? HandRanking.RoyalFlush : ranking;
+
+    // ── Threshold checks ───────────────────────────────────────────────────
+    let canCall: boolean;
+    let shouldRaise: boolean;
+    if (isPreflop) {
+      canCall = effectiveStrength >= strategy.preflopCallMinStrength;
+      shouldRaise = effectiveStrength >= strategy.preflopRaiseMinStrength;
     } else {
-      // Must call
+      canCall = effectiveRanking >= strategy.postflopCallMinRanking;
+      shouldRaise = effectiveRanking >= strategy.postflopRaiseMinRanking;
+    }
+
+    // ── Decision ───────────────────────────────────────────────────────────
+    if (facingRaise) {
+      if (shouldRaise) {
+        return this.buildRaiseAction(currentBet, this.gameState.pot, strategy.raiseSizing, playerCommitted, bot.stack);
+      }
+      if (canCall) {
+        return { type: PokerActionType.Call };
+      }
+      // Weak hand facing aggression — fold based on frequency, otherwise call
+      return Math.random() < strategy.foldToRaiseFrequency
+        ? { type: PokerActionType.Fold }
+        : { type: PokerActionType.Call };
+    } else {
+      if (shouldRaise) {
+        return this.buildRaiseAction(currentBet, this.gameState.pot, strategy.raiseSizing, playerCommitted, bot.stack);
+      }
+      return { type: PokerActionType.Check };
+    }
+  }
+
+  /**
+   * Returns a preflop hand strength estimate (0–100) using categorical buckets.
+   * Higher = stronger starting hand.
+   */
+  private getPreflopStrength(c1: Card, c2: Card): number {
+    // Jokers are powerful wildcards
+    if (isJokerCard(c1) || isJokerCard(c2)) return 90;
+
+    const hi = Math.max(c1.rank, c2.rank) as Rank;
+    const lo = Math.min(c1.rank, c2.rank) as Rank;
+    const isPair = hi === lo;
+    const suited = c1.suit === c2.suit ? 5 : 0;
+
+    if (isPair) {
+      const pairStrength: Partial<Record<Rank, number>> = {
+        [Rank.Ace]: 100, [Rank.King]: 95, [Rank.Queen]: 87, [Rank.Jack]: 77,
+        [Rank.Ten]: 67,  [Rank.Nine]: 60, [Rank.Eight]: 54, [Rank.Seven]: 48,
+        [Rank.Six]: 42,  [Rank.Five]: 37, [Rank.Four]: 33,  [Rank.Three]: 29,
+        [Rank.Two]: 25,
+      };
+      return pairStrength[hi] ?? 25;
+    }
+
+    const gap = hi - lo;
+
+    if (hi === Rank.Ace) {
+      if (lo >= Rank.King)  return 77 + suited;
+      if (lo >= Rank.Queen) return 67 + suited;
+      if (lo >= Rank.Jack)  return 60 + suited;
+      if (lo >= Rank.Ten)   return 55 + suited;
+      if (lo >= Rank.Eight) return 45 + suited;
+      return 35 + suited;
+    }
+
+    if (hi === Rank.King) {
+      if (lo >= Rank.Queen) return 62 + suited;
+      if (lo >= Rank.Jack)  return 56 + suited;
+      if (lo >= Rank.Ten)   return 50 + suited;
+      return 20 + suited;
+    }
+
+    if (hi >= Rank.Jack && lo >= Rank.Ten) return 52 + suited;
+    if (gap === 1) return 30 + suited; // Suited/offsuit connectors
+    if (gap === 2) return 22 + suited;
+    return Math.max(5, 20 - gap * 2 + suited);
+  }
+
+  /**
+   * Evaluates the best post-flop hand ranking for a bot given its hole cards
+   * and the current board (3, 4, or 5 cards).
+   */
+  private getPostflopRanking(holeCards: [Card, Card], board: Card[]): HandRanking {
+    if (board.length >= 5) {
+      const hasJoker = holeCards.some(isJokerCard);
+      const hv = hasJoker
+        ? evaluateBestHandWithJokers(holeCards, board)
+        : evaluateBestHand(holeCards, board);
+      return hv.ranking;
+    }
+
+    if (board.length === 4) {
+      // Turn: pick best 5 from 6 cards (C(6,5) = 6 combinations)
+      const allCards = [...holeCards, ...board];
+      let best = HandRanking.HighCard;
+      for (let skip = 0; skip < allCards.length; skip++) {
+        const five = allCards.filter((_, i) => i !== skip);
+        const hv = evaluateFiveCardHand(five);
+        if (hv.ranking > best) best = hv.ranking;
+      }
+      return best;
+    }
+
+    // Flop: exactly 2 hole + 3 board = 5 cards
+    return evaluateFiveCardHand([...holeCards, ...board]).ranking;
+  }
+
+  /**
+   * Builds a RaiseTo action respecting the bot's sizing preference and stack limit.
+   * Falls back to Call if the bot cannot raise higher than the current bet.
+   */
+  private buildRaiseAction(
+    currentBet: number,
+    pot: number,
+    sizing: 'min' | 'pot' | 'large',
+    botCommitted: number,
+    botStack: number,
+  ): PokerAction {
+    const MIN_OPEN = 20; // minimum opening bet when no previous bet exists
+    let raiseToAmount: number;
+
+    if (currentBet === 0) {
+      // Opening the betting — use a fraction of pot or a fixed floor
+      raiseToAmount = Math.max(MIN_OPEN, Math.round(pot * 0.5));
+    } else if (sizing === 'min') {
+      raiseToAmount = currentBet * 2;
+    } else if (sizing === 'pot') {
+      raiseToAmount = currentBet + pot;
+    } else {
+      raiseToAmount = currentBet * 3;
+    }
+
+    // Cap at all-in
+    const maxRaiseTo = botCommitted + botStack;
+    raiseToAmount = Math.min(raiseToAmount, maxRaiseTo);
+
+    // Must result in a net bet increase
+    if (raiseToAmount <= currentBet) {
       return { type: PokerActionType.Call };
+    }
+
+    return { type: PokerActionType.RaiseTo, raiseToAmount };
+  }
+
+  /**
+   * Applies a list of starting items directly to a bot's private state.
+   * This replicates shop purchase effects without adding items to inventory.
+   */
+  private applyBotStartingItems(botId: number, items: ShopItemType[]): void {
+    const ps = this.playerPrivateState.get(botId);
+    if (!ps) return;
+
+    for (const item of items) {
+      switch (item) {
+        case ShopItemType.FiveLeafClover:
+          ps.hasFiveLeafClover = true;
+          break;
+        case ShopItemType.FourLeafClover:
+          ps.hasFourLeafClover = true;
+          ps.permanentLuck += 7;
+          break;
+        case ShopItemType.Cigarette:
+          ps.luckBuffs.push({ amount: 5, turnsRemaining: 5 });
+          break;
+        case ShopItemType.Whiskey:
+          ps.luckBuffs.push({ amount: 10, turnsRemaining: 3 });
+          break;
+        case ShopItemType.Gun:
+          ps.hasGun = true;
+          break;
+        case ShopItemType.Bullet:
+          ps.bullets += 1;
+          break;
+        case ShopItemType.CardSleeveUnlock:
+          ps.hasCardSleeveUnlock = true;
+          break;
+        case ShopItemType.SleeveExtender:
+          ps.hasSleeveExtender = true;
+          break;
+        case ShopItemType.XRayGoggles:
+          ps.xrayCharges += 3;
+          break;
+        case ShopItemType.Rake:
+          ps.hasRake = true;
+          break;
+        case ShopItemType.HiddenCamera:
+          ps.hiddenCameraCharges += 3;
+          break;
+        case ShopItemType.Bond:
+          ps.bonds.push({ roundsHeld: 0, purchasePrice: 50, currentValue: 50 });
+          break;
+        // ExtraCard, Joker, StockOption require card-selection UI — skip for starting items
+        default:
+          break;
+      }
     }
   }
 
@@ -170,10 +398,30 @@ export class GameManager {
     return playerId;
   }
 
-  playVsBots(playerName: string): number {
+  playVsBots(playerName: string, profiles: BotProfile[] = DEFAULT_BOT_PROFILES): number {
     // Clear any existing players
     this.gameState.players = [];
     this.playerPrivateState.clear();
+    this.botProfiles.clear();
+    this.botHandCounts.clear();
+    this.botItemRulesFiredThisHand.clear();
+    this.holeCards.clear();
+    this.playerShopSlots.clear();
+    this.deck = [];
+    this.lastRaiserId = 0;
+    this.playersActedThisRound.clear();
+    this.sleeveSwappedThisRound.clear();
+    this.winnerId = 0;
+    this.winnerIds = [];
+    this.foldedOut = false;
+    this.gameState.phase = HandPhase.Lobby;
+    this.gameState.round = BettingRound.None;
+    this.gameState.pot = 0;
+    this.gameState.currentBetToMatch = 0;
+    this.gameState.board = [];
+    this.gameState.activePlayerId = 0;
+    this.gameState.dealerPlayerId = 0;
+    this.gameState.caughtCheaterPlayerId = null;
 
     // Add human player
     const playerId = 1;
@@ -213,12 +461,22 @@ export class GameManager {
       unlockedShopSlots: 1,
     });
 
-    // Add 3 bots with auto-ready
-    for (let i = 1; i <= 3; i++) {
-      const botId = i + 1;
+    // Shuffle profiles and pick 3 (Fisher-Yates)
+    const shuffled = [...profiles];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const selectedProfiles = shuffled.slice(0, 3);
+
+    // Add bots from profiles
+    for (let i = 0; i < selectedProfiles.length; i++) {
+      const profile = selectedProfiles[i];
+      const botId = i + 2; // IDs 2, 3, 4, …
+
       this.gameState.players.push({
         id: botId,
-        name: `bot ${i}`,
+        name: profile.displayName,
         stack: 1000,
         committedThisRound: 0,
         contributedThisHand: 0,
@@ -251,6 +509,9 @@ export class GameManager {
         hasFiveLeafClover: false,
         unlockedShopSlots: 1,
       });
+
+      this.botProfiles.set(botId, profile);
+      this.applyBotStartingItems(botId, profile.startingItems);
     }
 
     return playerId;
@@ -319,6 +580,17 @@ export class GameManager {
     this.holeCards.clear();
     this.playersActedThisRound.clear(); // Reset action tracking for new hand
     this.sleeveSwappedThisRound.clear(); // Reset sleeve swap tracking for new hand
+    this.botItemRulesFiredThisHand.clear();
+    this.foldedOut = false;
+    this.winnerId = 0;
+    this.winnerIds = [];
+
+    // Increment hand count for each bot
+    for (const player of this.gameState.players) {
+      if (player.isBot) {
+        this.botHandCounts.set(player.id, (this.botHandCounts.get(player.id) ?? 0) + 1);
+      }
+    }
     this.lastRaiserId = 0;
 
     // Shuffle deck and deal
@@ -764,6 +1036,56 @@ export class GameManager {
     player.stack += result.amount;
     ps.stockOptions.splice(optionIndex, 1);
     return { success: true, amount: result.amount };
+  }
+
+  /**
+   * Executes any pending item rules for a bot on the current hand.
+   * Fires at most once per hand per bot. Returns true if an action was taken
+   * (caller should emit an updated game state to clients).
+   */
+  executeBotItemRules(botId: number): boolean {
+    if (this.botItemRulesFiredThisHand.has(botId)) return false;
+
+    const profile = this.botProfiles.get(botId);
+    if (!profile?.strategy.itemRules?.length) return false;
+
+    const handCount = this.botHandCounts.get(botId) ?? 0;
+    if (handCount === 0) return false;
+
+    let didSomething = false;
+
+    for (const rule of profile.strategy.itemRules) {
+      if (handCount % rule.everyNHands !== 0) continue;
+
+      if (rule.action === 'cash-out-stock-option') {
+        const ps = this.playerPrivateState.get(botId);
+        if (ps && ps.stockOptions.length > 0) {
+          const result = this.cashOutStockOption(botId, 0);
+          if (result.success) {
+            didSomething = true;
+            if (rule.replaceWith !== undefined) {
+              this.applyBotStartingItems(botId, [rule.replaceWith]);
+            }
+          }
+        }
+      } else if (rule.action === 'cash-out-bond') {
+        const ps = this.playerPrivateState.get(botId);
+        if (ps && ps.bonds.length > 0) {
+          const result = this.cashOutBond(botId, 0);
+          if (result.success) {
+            didSomething = true;
+            if (rule.replaceWith !== undefined) {
+              this.applyBotStartingItems(botId, [rule.replaceWith]);
+            }
+          }
+        }
+      }
+    }
+
+    if (didSomething) {
+      this.botItemRulesFiredThisHand.add(botId);
+    }
+    return didSomething;
   }
 
   playerDisconnected(playerId: number): void {

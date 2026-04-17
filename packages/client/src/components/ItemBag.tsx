@@ -15,9 +15,9 @@ import {
 import { CardDisplay } from './CardDisplay';
 
 // ── Grid constants ──────────────────────────────────────────────────────────
-const COLS = 4;
-const ROWS = 3;
-const TOTAL = COLS * ROWS; // 12 slots per section
+const COLS = 1;
+const ROWS = 10;
+const TOTAL = COLS * ROWS; // 10 slots per section
 
 // ── Entry types ─────────────────────────────────────────────────────────────
 type ActiveEntry =
@@ -206,6 +206,12 @@ export const ItemBag: React.FC<ItemBagProps> = ({ section }) => {
             <span className="item-bag-icon">📷</span>
             <span className="item-bag-label">Camera</span>
             <span className="item-bag-badge">×{entry.charges}</span>
+            {Array.from(revealedCards.entries()).map(([pid, card]) => (
+              <div key={pid} className="item-bag-peeked-card">
+                <span className="item-bag-hint">{gameState?.players.find(p => p.id === pid)?.name ?? `P${pid}`}</span>
+                <CardDisplay card={card} className="item-bag-card" mode="display" />
+              </div>
+            ))}
             <button
               className="item-bag-use-btn"
               onClick={() => setTargetingId(entry.id)}
