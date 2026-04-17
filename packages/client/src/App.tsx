@@ -21,14 +21,16 @@ const AppContent: React.FC = () => {
     return <LobbyScreen />;
   }
 
-  // Show win screen when only 1 non-eliminated player remains
+  // Show win screen when only 1 non-eliminated player remains, but only after showdown
   const activePlayers = gameState?.players.filter(p => !p.isEliminated) ?? [];
-  if (activePlayers.length === 1 && gameState!.players.length > 1) {
-    return <WinScreen />;
-  }
+  const gameOver = activePlayers.length === 1 && gameState!.players.length > 1;
 
   if (phase === HandPhase.Showdown) {
     return <ShowdownScreen />;
+  }
+
+  if (gameOver) {
+    return <WinScreen />;
   }
 
   if (phase === HandPhase.ItemShop) {

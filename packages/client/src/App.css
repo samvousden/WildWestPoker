@@ -1245,3 +1245,345 @@
   color: #fff;
   border-color: #888;
 }
+
+/* ── Game board layout (item bag + board side by side) ──────────────────── */
+.game-board-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  width: 100%;
+  max-width: 1700px;
+}
+
+/* ── Item Bag ────────────────────────────────────────────────────────────── */
+.item-bag {
+  flex-shrink: 0;
+  width: 558px;
+  background: rgba(144, 238, 144, 0.08);
+  border: 2px solid rgba(144, 238, 144, 0.35);
+  border-radius: 10px;
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-self: flex-start;
+  position: sticky;
+  top: 16px;
+}
+
+.item-bag-title {
+  margin: 0 0 4px;
+  font-size: 1em;
+  color: #90ee90;
+  text-align: center;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.item-bag-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item-bag-section-label {
+  font-size: 0.7em;
+  font-weight: bold;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  padding-left: 2px;
+}
+
+/* 4 × 3 grid */
+.item-bag-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.item-bag-slot {
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.item-bag-slot--empty {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+  min-height: 130px;
+}
+
+.item-bag-slot--filled {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  min-height: 130px;
+}
+
+/* ── Cell content ─────────────────────────────────────────────────────────── */
+.item-bag-cell-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 3px;
+  height: 100%;
+  min-height: 130px;
+  text-align: center;
+}
+
+.item-bag-icon {
+  font-size: 2.6em;
+  line-height: 1;
+}
+
+.item-bag-label {
+  font-size: 0.82em;
+  color: #eee;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.item-bag-badge {
+  background: rgba(255, 215, 0, 0.2);
+  color: #ffd700;
+  font-size: 0.82em;
+  font-weight: bold;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.item-bag-hint {
+  font-size: 0.78em;
+  color: #90ee90;
+  white-space: nowrap;
+}
+
+.item-bag-peeked-card {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  margin: 2px 0;
+  transform: scale(0.78);
+  transform-origin: center top;
+}
+
+.item-bag-use-btn {
+  margin-top: 2px;
+  padding: 4px 10px;
+  font-size: 0.78em;
+  font-weight: bold;
+  background: #4CAF50;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.2s;
+  white-space: nowrap;
+}
+
+.item-bag-use-btn:hover:not(:disabled) {
+  background: #45a049;
+}
+
+.item-bag-use-btn:disabled {
+  background: #444;
+  color: #777;
+  cursor: not-allowed;
+}
+
+/* Passive cell — slightly dimmer, hover shows tooltip */
+.item-bag-passive {
+  cursor: default;
+}
+
+.item-bag-passive:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* Sleeve card slot */
+.item-bag-sleeve-cell .item-bag-sleeve-card {
+  transform: scale(0.7);
+  transform-origin: top center;
+  margin: -8px 0;
+}
+
+.item-bag-swap-row {
+  display: flex;
+  gap: 3px;
+}
+
+.item-bag-swap-btn {
+  padding: 4px 9px;
+  font-size: 0.78em;
+  font-weight: bold;
+  background: #9370db;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.item-bag-swap-btn:hover {
+  background: #7b68ee;
+}
+
+/* Target picker (shown inside the slot when picking a target) */
+.item-bag-targets {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 3px;
+  width: 100%;
+}
+
+.item-bag-target-btn {
+  padding: 4px 6px;
+  font-size: 0.78em;
+  background: #cc2200;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.item-bag-target-btn:hover:not(:disabled) {
+  background: #ff3300;
+}
+
+.item-bag-target-btn:disabled {
+  background: #4CAF50;
+  cursor: default;
+}
+
+.item-bag-cancel-btn {
+  padding: 3px 6px;
+  font-size: 0.75em;
+  background: transparent;
+  color: #aaa;
+  border: 1px solid #666;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.item-bag-cancel-btn:hover {
+  color: #fff;
+  border-color: #aaa;
+}
+
+.item-bag-no-targets {
+  font-size: 0.78em;
+  color: #999;
+  text-align: center;
+}
+
+.item-bag-empty-msg {
+  font-size: 0.75em;
+  color: rgba(255, 255, 255, 0.3);
+  text-align: center;
+  margin: 0;
+  font-style: italic;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Replace Sleeve Dialog ───────────────────────────────────────────────── */
+.replace-sleeve-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.replace-sleeve-dialog {
+  background: #1a1a2e;
+  border: 2px solid #ffd700;
+  border-radius: 12px;
+  padding: 32px 40px;
+  text-align: center;
+  min-width: 320px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.8);
+}
+
+.replace-sleeve-dialog h2 {
+  color: #ffd700;
+  margin: 0 0 8px 0;
+  font-size: 1.3em;
+}
+
+.replace-sleeve-dialog > p {
+  color: #ccc;
+  margin: 0 0 24px 0;
+  font-size: 0.95em;
+}
+
+.replace-sleeve-options {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.replace-slot-btn {
+  background: rgba(255, 215, 0, 0.08);
+  border: 2px solid #ffd700;
+  border-radius: 8px;
+  padding: 14px 22px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 100px;
+  transition: background 0.2s;
+}
+
+.replace-slot-btn:hover {
+  background: rgba(255, 215, 0, 0.22);
+}
+
+.replace-slot-label {
+  color: #aaa;
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.replace-slot-card {
+  color: #fff;
+  font-size: 1.4em;
+  font-weight: bold;
+}
+
+.replace-slot-arrow {
+  color: #ffd700;
+  font-size: 0.78em;
+}
+
+.replace-cancel-btn {
+  background: transparent;
+  border: 1px solid #666;
+  border-radius: 6px;
+  color: #aaa;
+  padding: 7px 20px;
+  cursor: pointer;
+  font-size: 0.85em;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.replace-cancel-btn:hover {
+  color: #fff;
+  border-color: #aaa;
+}
+
+

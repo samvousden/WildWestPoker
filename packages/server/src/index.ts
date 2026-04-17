@@ -203,6 +203,8 @@ io.on('connection', (socket) => {
         for (const player of currentState.players) {
           player.isReady = false;
         }
+        // Decrement luck buffs at end of hand (so the hand that was just played counts)
+        gameManager.tickLuckBuffs();
         currentState.phase = 4; // HandPhase.ItemShop
         io.emit('game-state-updated', currentState);
       }
@@ -429,8 +431,11 @@ io.on('connection', (socket) => {
     callback({ success: true, card, price });
   });
 
-  socket.on('buy-extra-card', (playerId: number, card: Card, callback) => {
-    const success = gameManager.buyExtraCard(playerId, card);
+  socket.on('buy-extra-card', (playerId: number, card: Card, targetSlotOrCallback: any, callbackArg?: any) => {
+    const targetSlot: 0 | 1 | undefined =
+      (targetSlotOrCallback === 0 || targetSlotOrCallback === 1) ? targetSlotOrCallback : undefined;
+    const callback = typeof targetSlotOrCallback === 'function' ? targetSlotOrCallback : callbackArg;
+    const success = gameManager.buyExtraCard(playerId, card, targetSlot);
     
     if (success) {
       io.emit('game-state-updated', gameManager.getGameState());
@@ -469,8 +474,11 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('buy-item', (playerId: number, itemType: number, callback) => {
-    const success = gameManager.buyItem(playerId, itemType);
+  socket.on('buy-item', (playerId: number, itemType: number, targetSlotOrCallback: any, callbackArg?: any) => {
+    const targetSlot: 0 | 1 | undefined =
+      (targetSlotOrCallback === 0 || targetSlotOrCallback === 1) ? targetSlotOrCallback : undefined;
+    const callback = typeof targetSlotOrCallback === 'function' ? targetSlotOrCallback : callbackArg;
+    const success = gameManager.buyItem(playerId, itemType, targetSlot);
     
     if (success) {
       io.emit('game-state-updated', gameManager.getGameState());

@@ -1,17 +1,24 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useGame } from '../context/GameContext';
-import { Card, ShopItemType, ShopSlotItem } from '@poker/shared';
+import { Card, ShopItemType, ShopSlotItem, cardToDisplayString } from '@poker/shared';
 import { ShopSlot } from './ShopSlot';
 
 const REFRESH_SHOP_COST = 50;
 const SLOT_UNLOCK_COSTS = [0, 50, 200] as const; // index = slot position
 
+interface ReplacePending {
+  card: Card;
+  shopSlotIndex: number;
+  isJoker: boolean;
+}
+
 export const ItemShop: React.FC = () => {
-  const { gameState, socket, playerId, setReady } = useGame();
+  const { gameState, socket, playerId, setReady, sleeveCard, sleeveCard2 } = useGame();
   const [shopSlots, setShopSlots] = useState<ShopSlotItem[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
   const [boughtIndices, setBoughtIndices] = useState<Set<number>>(new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [replacePending, setReplacePending] = useState<ReplacePending | null>(null);
 
   if (!gameState) {
     return <div>Loading...</div>;
@@ -19,6 +26,7 @@ export const ItemShop: React.FC = () => {
 
   const currentPlayer = gameState.players.find(p => p.id === playerId);
   const allReady = gameState.players.length >= 2 && gameState.players.every(p => p.isReady);
+  const hasSleeveExtender = currentPlayer?.inventory.includes(ShopItemType.SleeveExtender) ?? false;
 
   // Load shop slots when entering shop
   useEffect(() => {
@@ -62,17 +70,51 @@ export const ItemShop: React.FC = () => {
     });
   }, [socket, playerId]);
 
+  const emitBuyCard = useCallback((card: Card, shopSlotIndex: number, targetSlot?: 0 | 1) => {
+    if (!socket || !playerId) return;
+    const args: any[] = [playerId, card];
+    if (targetSlot !== undefined) args.push(targetSlot);
+    args.push((response: any) => {
+      if (response.success) {
+        setBoughtIndices(prev => new Set(prev).add(shopSlotIndex));
+      } else {
+        alert(`Failed to purchase: ${response.error}`);
+      }
+    });
+    socket.emit('buy-extra-card', ...args);
+  }, [socket, playerId]);
+
+  const emitBuyJoker = useCallback((shopSlotIndex: number, targetSlot?: 0 | 1) => {
+    if (!socket || !playerId) return;
+    const args: any[] = [playerId, ShopItemType.Joker];
+    if (targetSlot !== undefined) args.push(targetSlot);
+    args.push((response: any) => {
+      if (response.success) {
+        setBoughtIndices(prev => new Set(prev).add(shopSlotIndex));
+      } else {
+        alert(`Failed to purchase: ${response.error}`);
+      }
+    });
+    socket.emit('buy-item', ...args);
+  }, [socket, playerId]);
+
   const handleBuyItem = useCallback((slotType: ShopItemType, slotIndex: number, previewCard?: Card) => {
     if (!socket || !playerId) return;
 
+    const bothSlotsFull = sleeveCard !== null && sleeveCard2 !== null;
+
     if (slotType === ShopItemType.ExtraCard && previewCard) {
-      socket.emit('buy-extra-card', playerId, previewCard, (response: any) => {
-        if (response.success) {
-          setBoughtIndices(prev => new Set(prev).add(slotIndex));
-        } else {
-          alert(`Failed to purchase: ${response.error}`);
-        }
-      });
+      if (bothSlotsFull && hasSleeveExtender) {
+        setReplacePending({ card: previewCard, shopSlotIndex: slotIndex, isJoker: false });
+      } else {
+        emitBuyCard(previewCard, slotIndex);
+      }
+    } else if (slotType === ShopItemType.Joker) {
+      if (bothSlotsFull && hasSleeveExtender) {
+        setReplacePending({ card: null as unknown as Card, shopSlotIndex: slotIndex, isJoker: true });
+      } else {
+        emitBuyJoker(slotIndex);
+      }
     } else {
       socket.emit('buy-item', playerId, slotType, (response: any) => {
         if (response.success) {
@@ -82,7 +124,17 @@ export const ItemShop: React.FC = () => {
         }
       });
     }
-  }, [socket, playerId]);
+  }, [socket, playerId, sleeveCard, sleeveCard2, hasSleeveExtender, emitBuyCard, emitBuyJoker]);
+
+  const handleReplaceSlot = useCallback((targetSlot: 0 | 1) => {
+    if (!replacePending) return;
+    if (replacePending.isJoker) {
+      emitBuyJoker(replacePending.shopSlotIndex, targetSlot);
+    } else {
+      emitBuyCard(replacePending.card, replacePending.shopSlotIndex, targetSlot);
+    }
+    setReplacePending(null);
+  }, [replacePending, emitBuyCard, emitBuyJoker]);
 
 
   return (
@@ -144,6 +196,32 @@ export const ItemShop: React.FC = () => {
           <p className="waiting-message">All players ready - starting next hand...</p>
         )}
       </div>
+
+      {replacePending && (
+        <div className="replace-sleeve-overlay" onClick={() => setReplacePending(null)}>
+          <div className="replace-sleeve-dialog" onClick={e => e.stopPropagation()}>
+            <h2>Both sleeve slots are full</h2>
+            <p>Choose a slot to replace:</p>
+            <div className="replace-sleeve-options">
+              <button className="replace-slot-btn" onClick={() => handleReplaceSlot(0)}>
+                <span className="replace-slot-label">Slot 1</span>
+                <span className="replace-slot-card">
+                  {sleeveCard ? cardToDisplayString(sleeveCard) : '—'}
+                </span>
+                <span className="replace-slot-arrow">↓ Replace</span>
+              </button>
+              <button className="replace-slot-btn" onClick={() => handleReplaceSlot(1)}>
+                <span className="replace-slot-label">Slot 2</span>
+                <span className="replace-slot-card">
+                  {sleeveCard2 ? cardToDisplayString(sleeveCard2) : '—'}
+                </span>
+                <span className="replace-slot-arrow">↓ Replace</span>
+              </button>
+            </div>
+            <button className="replace-cancel-btn" onClick={() => setReplacePending(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

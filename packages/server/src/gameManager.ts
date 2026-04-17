@@ -287,20 +287,17 @@ export class GameManager {
       // Age bonds and stock options
       for (const bond of ps.bonds) {
         bond.roundsHeld++;
-        // Grow 10% per hand starting from the 2nd hand held (not the first)
+        // Grow 25% per hand starting from the 2nd hand held (not the first)
         if (bond.roundsHeld >= 2) {
-          bond.currentValue = Math.min(1000, Math.round(bond.currentValue * 1.1));
+          bond.currentValue = Math.min(1000, Math.round(bond.currentValue * 1.25));
         }
       }
       for (const opt of ps.stockOptions) opt.roundsHeld++;
 
       // Tick down luck buffs and remove expired ones
-      ps.luckBuffs = ps.luckBuffs
-        .map(b => ({ ...b, turnsRemaining: b.turnsRemaining - 1 }))
-        .filter(b => b.turnsRemaining > 0);
+      // (moved to tickLuckBuffs(), called when transitioning to ItemShop)
 
-      // Reset shop slot unlocks for the new hand's shop visit
-      ps.unlockedShopSlots = 1;
+      // Note: unlockedShopSlots is intentionally NOT reset — slot unlocks persist across hands
     }
 
     // Rotate dealer button — skip eliminated players
@@ -531,7 +528,7 @@ export class GameManager {
     return true;
   }
 
-  buyItem(playerId: number, itemType: number): boolean {
+  buyItem(playerId: number, itemType: number, targetSlot?: 0 | 1): boolean {
     const player = this.gameState.players.find(p => p.id === playerId);
     if (!player) return false;
 
@@ -549,20 +546,31 @@ export class GameManager {
       return true;
     }
 
-    // Handle Joker - put joker card in sleeve
+    // Handle Joker - put joker card in sleeve (replaces existing card if both slots full)
     if (itemType === ShopItemType.Joker) {
       if (!privateState.hasCardSleeveUnlock) return false;
-      // Fill slot 1 first, then slot 2 if extender owned
-      if (privateState.sleeveCard !== null) {
-        if (!privateState.hasSleeveExtender || privateState.sleeveCard2 !== null) return false;
-        const cost = getPrice(ShopItemType.Joker);
-        if (player.stack < cost) return false;
+      const cost = getPrice(ShopItemType.Joker);
+      if (player.stack < cost) return false;
+      // If caller specified a target slot, honour it
+      if (targetSlot === 0 || targetSlot === 1) {
+        if (targetSlot === 1 && !privateState.hasSleeveExtender) return false;
+        player.stack -= cost;
+        if (targetSlot === 0) privateState.sleeveCard = JOKER_CARD;
+        else privateState.sleeveCard2 = JOKER_CARD;
+        return true;
+      }
+      // Auto-fill: slot 1 first, then slot 2, then replace slot 1
+      if (privateState.sleeveCard === null) {
+        player.stack -= cost;
+        privateState.sleeveCard = JOKER_CARD;
+        return true;
+      }
+      if (privateState.hasSleeveExtender && privateState.sleeveCard2 === null) {
         player.stack -= cost;
         privateState.sleeveCard2 = JOKER_CARD;
         return true;
       }
-      const cost = getPrice(ShopItemType.Joker);
-      if (player.stack < cost) return false;
+      // Both slots occupied — replace slot 1
       player.stack -= cost;
       privateState.sleeveCard = JOKER_CARD;
       return true;
@@ -657,6 +665,7 @@ export class GameManager {
       player.stack -= cost;
       privateState.permanentLuck += 7;
       privateState.hasFourLeafClover = true;
+      player.inventory.push(ShopItemType.FourLeafClover);
       return true;
     }
 
@@ -666,6 +675,7 @@ export class GameManager {
       if (player.stack < cost) return false;
       player.stack -= cost;
       privateState.hasFiveLeafClover = true;
+      player.inventory.push(ShopItemType.FiveLeafClover);
       return true;
     }
 
@@ -767,31 +777,40 @@ export class GameManager {
     return this.getRandomAvailableCard();
   }
 
-  buyExtraCard(playerId: number, card: Card): boolean {
+  buyExtraCard(playerId: number, card: Card, targetSlot?: 0 | 1): boolean {
     const player = this.gameState.players.find(p => p.id === playerId);
     if (!player) return false;
 
     const privateState = this.playerPrivateState.get(playerId);
     if (!privateState) return false;
 
-    // Try slot 1 first, then slot 2 if extender owned
+    const cost = getCardPrice(card);
+    if (player.stack < cost) return false;
+
+    // If caller specified a target slot, honour it
+    if (targetSlot === 0 || targetSlot === 1) {
+      if (targetSlot === 1 && !privateState.hasSleeveExtender) return false;
+      player.stack -= cost;
+      if (targetSlot === 0) privateState.sleeveCard = card;
+      else privateState.sleeveCard2 = card;
+      return true;
+    }
+
+    // Auto-fill: slot 1 first, then slot 2, then replace slot 1
     if (privateState.sleeveCard === null) {
-      const cost = getCardPrice(card);
-      if (player.stack < cost) return false;
       player.stack -= cost;
       privateState.sleeveCard = card;
       return true;
     }
-
     if (privateState.hasSleeveExtender && privateState.sleeveCard2 === null) {
-      const cost = getCardPrice(card);
-      if (player.stack < cost) return false;
       player.stack -= cost;
       privateState.sleeveCard2 = card;
       return true;
     }
-
-    return false; // Both slots full
+    // Both slots occupied — replace slot 1
+    player.stack -= cost;
+    privateState.sleeveCard = card;
+    return true;
   }
 
   getPlayerSleeveCards(playerId: number): { sleeveCard: Card | null; sleeveCard2: Card | null } {
@@ -847,6 +866,15 @@ export class GameManager {
       shooter.isEliminated = true;
       target.stack += lost;
       return { success: true, backfired: true };
+    }
+  }
+
+  /** Tick down luck buffs for all players — call when a hand ends (ItemShop transition). */
+  tickLuckBuffs(): void {
+    for (const ps of this.playerPrivateState.values()) {
+      ps.luckBuffs = ps.luckBuffs
+        .map(b => ({ ...b, turnsRemaining: b.turnsRemaining - 1 }))
+        .filter(b => b.turnsRemaining > 0);
     }
   }
 
@@ -907,7 +935,7 @@ export class GameManager {
       if (type === ShopItemType.Bond) {
         const randPrice = Math.floor(Math.random() * 16) * 10 + 50; // $50-$200 in $10 steps
         slot.price = randPrice;
-        slot.description = `Invest $${randPrice}. Value grows 10%/hand (max $1,000 sell).`;
+        slot.description = `Invest $${randPrice}. Value grows 25%/hand (max $1,000 sell).`;
       } else if (type === ShopItemType.StockOption) {
         const randPrice = (Math.floor(Math.random() * 10) + 1) * 50; // $50-$500 in $50 steps
         slot.price = randPrice;
@@ -1195,6 +1223,13 @@ export class GameManager {
       return true;
     }
 
+    // If the current active player is all-in and hasn't yet passed their item-use turn,
+    // hold here so the client can show them the "End Turn" button
+    const activePlayer = this.gameState.players.find(p => p.id === this.gameState.activePlayerId);
+    if (activePlayer?.isAllIn && !this.playersActedThisRound.has(activePlayer.id)) {
+      return false;
+    }
+
     // All non-all-in players must have matched the current bet
     const allMatched = nonAllIn.every(
       p => p.committedThisRound === this.gameState.currentBetToMatch
@@ -1326,7 +1361,7 @@ export class GameManager {
     let remainingPot = this.gameState.pot;
     for (const player of this.gameState.players) {
       const ps = this.playerPrivateState.get(player.id);
-      if (ps?.hasRake && player.isInHand) {
+      if (ps?.hasRake && player.isInHand && player.stack > 0) {
         const rakeAmount = Math.floor(this.gameState.pot * 0.05);
         if (rakeAmount > 0) {
           player.stack += rakeAmount;
@@ -1369,7 +1404,7 @@ export class GameManager {
     let remainingPot = this.gameState.pot;
     for (const player of this.gameState.players) {
       const ps = this.playerPrivateState.get(player.id);
-      if (ps?.hasRake && player.isInHand) {
+      if (ps?.hasRake && player.isInHand && player.stack > 0) {
         const rakeAmount = Math.floor(this.gameState.pot * 0.05);
         if (rakeAmount > 0) {
           player.stack += rakeAmount;

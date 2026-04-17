@@ -123,6 +123,36 @@ export function getItemShopWeight(type: ShopItemType): number {
   }
 }
 
+/**
+ * Active items require explicit player action to trigger (have a "Use" button).
+ * Passive items apply their effect automatically and are just held in the bag.
+ *
+ * Active:  Gun, Bullet, ExtraCard, Joker, XRayGoggles, HiddenCamera, Bond, StockOption
+ * Passive: Cigarette, Whiskey, FourLeafClover, FiveLeafClover, CardSleeveUnlock, SleeveExtender, Rake
+ */
+export const ITEM_IS_ACTIVE: Record<ShopItemType, boolean> = {
+  [ShopItemType.None]:             false,
+  [ShopItemType.Cigarette]:        false,
+  [ShopItemType.Whiskey]:          false,
+  [ShopItemType.FourLeafClover]:   false,
+  [ShopItemType.FiveLeafClover]:   false,
+  [ShopItemType.Gun]:              true,
+  [ShopItemType.Bullet]:           true,
+  [ShopItemType.CardSleeveUnlock]: false,
+  [ShopItemType.ExtraCard]:        true,
+  [ShopItemType.Joker]:            true,
+  [ShopItemType.SleeveExtender]:   false,
+  [ShopItemType.XRayGoggles]:      true,
+  [ShopItemType.Rake]:             false,
+  [ShopItemType.HiddenCamera]:     true,
+  [ShopItemType.Bond]:             true,
+  [ShopItemType.StockOption]:      true,
+};
+
+export function isItemActive(type: ShopItemType): boolean {
+  return ITEM_IS_ACTIVE[type] ?? false;
+}
+
 /** Single source of truth for item base prices. getPrice reads from this. */
 export const ShopCatalog: Record<ShopItemType, number> = {
   [ShopItemType.None]:             Infinity,
@@ -131,10 +161,10 @@ export const ShopCatalog: Record<ShopItemType, number> = {
   [ShopItemType.FourLeafClover]:   77,
   [ShopItemType.FiveLeafClover]:   333,
   [ShopItemType.Gun]:              400,
-  [ShopItemType.Bullet]:           25,
+  [ShopItemType.Bullet]:           50,
   [ShopItemType.CardSleeveUnlock]: 200,
   [ShopItemType.ExtraCard]:        0,
-  [ShopItemType.Joker]:            100,
+  [ShopItemType.Joker]:            150,
   [ShopItemType.SleeveExtender]:   300,
   [ShopItemType.XRayGoggles]:      80,
   [ShopItemType.Rake]:             200,
@@ -166,17 +196,17 @@ export function getShopItemInfo(type: ShopItemType): { name: string; description
     [ShopItemType.Cigarette]: { name: 'Cigarette', description: '+5 luck for 5 hands' },
     [ShopItemType.Whiskey]: { name: 'Whiskey', description: '+10 luck for 3 hands' },
     [ShopItemType.FourLeafClover]: { name: '4 Leaf Clover', description: 'Permanently +7 luck (one-time)' },
-    [ShopItemType.FiveLeafClover]: { name: '5 Leaf Clover', description: 'Set luck to 77 permanently. Cigarettes and whiskey have no further effect.' },
+    [ShopItemType.FiveLeafClover]: { name: '5 Leaf Clover', description: 'Permanently gain +70 luck. Cigarettes and whiskey have no further effect.' },
     [ShopItemType.Gun]: { name: 'Gun', description: 'For use on dirty cheaters' },
     [ShopItemType.Bullet]: { name: 'Bullet', description: 'You show those dirty cheaters who they\'re messing with' },
-    [ShopItemType.CardSleeveUnlock]: { name: 'Card Sleeve Unlock', description: 'A spot to hide a card in your sleeve' },
+    [ShopItemType.CardSleeveUnlock]: { name: 'Big Sleeves', description: 'A spot to hide a card in your sleeve' },
     [ShopItemType.ExtraCard]: { name: 'Extra Card', description: 'A random card from the deck to put in your sleeve' },
-    [ShopItemType.SleeveExtender]: { name: 'Card Sleeve Extender', description: 'Expand your sleeve to hold a second card' },
+    [ShopItemType.SleeveExtender]: { name: 'Bigger Sleeves', description: 'Expand your sleeve to hold a second card' },
     [ShopItemType.Joker]: { name: 'Joker', description: 'A wild card that becomes the best possible card at showdown' },
     [ShopItemType.XRayGoggles]: { name: 'X-Ray Goggles', description: 'Peek at the next community card (+3 charges)' },
     [ShopItemType.Rake]: { name: 'Rake', description: 'Secretly take 5% of every pot' },
     [ShopItemType.HiddenCamera]: { name: 'Hidden Camera', description: 'See one of an opponent\'s hole cards (+3 charges)' },
-    [ShopItemType.Bond]: { name: 'Bond', description: 'Invest at a random price. Value grows 10%/hand up to $1,000.' },
+    [ShopItemType.Bond]: { name: 'Bond', description: 'Invest at a random price. Value grows 25%/hand up to $1,000.' },
     [ShopItemType.StockOption]: { name: 'Stock Option', description: 'Invest at a random price. After 3 hands: 1/3 chance for 5x return.' },
   };
   return info[type];
@@ -192,16 +222,10 @@ export function getEligibleShopItems(state: PlayerPrivateState): ShopItemType[] 
   // Card sleeve extender (requires unlock, one-time purchase)
   if (state.hasCardSleeveUnlock && !state.hasSleeveExtender) items.push(ShopItemType.SleeveExtender);
 
-  // Card sleeve items (requires unlock + at least one empty sleeve slot)
+  // Card sleeve items (requires sleeve unlock; always available for repurchase to replace)
   if (state.hasCardSleeveUnlock) {
-    const hasSlot1Empty = state.sleeveCard === null;
-    const hasSlot2Empty = state.hasSleeveExtender && state.sleeveCard2 === null;
-    if (hasSlot1Empty || hasSlot2Empty) {
-      items.push(ShopItemType.ExtraCard);
-    }
-    if (hasSlot1Empty || hasSlot2Empty) {
-      items.push(ShopItemType.Joker);
-    }
+    items.push(ShopItemType.ExtraCard);
+    items.push(ShopItemType.Joker);
   }
 
   // Gun (one-time purchase, rare)
