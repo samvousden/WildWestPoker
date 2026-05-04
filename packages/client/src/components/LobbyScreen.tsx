@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 
 export const LobbyScreen: React.FC = () => {
-  const { gameState, playerId, isConnected, joinTable, playVsBots, setReady } = useGame();
+  const { gameState, playerId, isConnected, joinTable, playVsBots, setReady, setTimerSettings } = useGame();
   const [playerName, setPlayerName] = useState('Player');
+  const [bettingSeconds, setBettingSeconds] = useState(30);
+  const [shopSeconds, setShopSeconds] = useState(60);
 
   const handleJoin = async () => {
     const pid = await joinTable(playerName);
@@ -64,6 +66,12 @@ export const LobbyScreen: React.FC = () => {
 
   const readyCount = gameState?.players.filter(p => p.isReady).length || 0;
   const canStart = readyCount >= 2;
+  const isHost = gameState && playerId === gameState.players[0]?.id;
+  const isMultiplayer = gameState?.gameMode === 'multiplayer';
+
+  const handleApplyTimerSettings = () => {
+    setTimerSettings({ bettingSeconds, shopSeconds });
+  };
 
   return (
     <div className="lobby">
@@ -78,6 +86,43 @@ export const LobbyScreen: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {isMultiplayer && isHost && (
+        <div className="timer-settings">
+          <h3>Timer Settings (host only)</h3>
+          <label>
+            Betting timer (s):&nbsp;
+            <input
+              type="number"
+              min={10}
+              max={300}
+              value={bettingSeconds}
+              onChange={e => setBettingSeconds(Number(e.target.value))}
+              style={{ width: '60px' }}
+            />
+          </label>
+          &nbsp;&nbsp;
+          <label>
+            Shop timer (s):&nbsp;
+            <input
+              type="number"
+              min={10}
+              max={300}
+              value={shopSeconds}
+              onChange={e => setShopSeconds(Number(e.target.value))}
+              style={{ width: '60px' }}
+            />
+          </label>
+          &nbsp;&nbsp;
+          <button onClick={handleApplyTimerSettings}>Apply</button>
+        </div>
+      )}
+
+      {isMultiplayer && !isHost && gameState?.timerSettings && (
+        <p style={{ color: '#aaa', fontSize: '0.9em' }}>
+          Timers: {gameState.timerSettings.bettingSeconds}s betting / {gameState.timerSettings.shopSeconds}s shop
+        </p>
+      )}
 
       <button onClick={handleReady}>I'm Ready</button>
 

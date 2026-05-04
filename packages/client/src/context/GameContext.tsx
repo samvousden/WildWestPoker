@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { GameState, PokerAction, PlayerPublicState, Card, ShopSlotItem, BondState, StockOptionState, LuckBuff } from '@poker/shared';
+import { GameState, PokerAction, PlayerPublicState, Card, ShopSlotItem, BondState, StockOptionState, LuckBuff, TimerSettings } from '@poker/shared';
 
 interface GameContextType {
   gameState: GameState | null;
@@ -34,6 +34,7 @@ interface GameContextType {
   setReady: (isReady: boolean) => void;
   startHand: () => void;
   submitAction: (action: PokerAction) => Promise<boolean>;
+  setTimerSettings: (settings: TimerSettings) => void;
   useItem: (itemType: number, targetPlayerId?: number) => void;
   refreshSleeveCard: () => void;
   useXRay: () => void;
@@ -257,6 +258,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [socket, playerId]
   );
 
+  const setTimerSettings = useCallback(
+    (settings: TimerSettings) => {
+      if (!socket || !playerId) return;
+      socket.emit('set-timer-settings', playerId, settings, () => {});
+    },
+    [socket, playerId]
+  );
+
   const useXRay = useCallback(() => {
     if (!socket || !playerId) return;
     socket.emit('use-xray', playerId, (response: any) => {
@@ -388,6 +397,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setReady,
         startHand,
         submitAction,
+        setTimerSettings,
         useItem,
         refreshSleeveCard,
         useXRay,

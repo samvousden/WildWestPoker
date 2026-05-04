@@ -347,6 +347,39 @@
   color: #fff;
 }
 
+/* ── Turn Timer ──────────────────────────────────────────────────────────── */
+.turn-timer {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.turn-timer__digits {
+  position: absolute;
+  font-size: 14px;
+  font-weight: bold;
+  color: #fff;
+  user-select: none;
+  pointer-events: none;
+}
+
+.turn-timer--compact .turn-timer__digits {
+  font-size: 10px;
+}
+
+@keyframes urgentPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.turn-timer--urgent .turn-timer__digits {
+  color: #ef4444;
+  animation: urgentPulse 0.6s ease-in-out infinite;
+}
+/* ────────────────────────────────────────────────────────────────────────── */
+
 .action-panel {
   background: rgba(0, 0, 0, 0.4);
   border: 2px solid #ffd700;

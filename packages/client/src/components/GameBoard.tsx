@@ -44,6 +44,9 @@ export const GameBoard: React.FC = () => {
               player={player}
               isYou={player.id === playerId}
               isActive={player.id === gameState.activePlayerId}
+              turnDeadline={gameState.turnDeadline}
+              totalSeconds={gameState.timerSettings?.bettingSeconds ?? 30}
+              isMultiplayer={gameState.gameMode === 'multiplayer'}
             />
           ))}
         </div>

@@ -1,5 +1,6 @@
 import React from 'react';
 import { PlayerPublicState, PokerActionType } from '@poker/shared';
+import { TurnTimer } from './TurnTimer';
 
 const formatLastAction = (lastAction?: { type: number; amount?: number }): string => {
   if (!lastAction) return '';
@@ -16,11 +17,24 @@ interface PlayerSeatProps {
   player: PlayerPublicState;
   isYou: boolean;
   isActive: boolean;
+  turnDeadline?: number | null;
+  totalSeconds?: number;
+  isMultiplayer?: boolean;
 }
 
-export const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isYou, isActive }) => (
+export const PlayerSeat: React.FC<PlayerSeatProps> = ({
+  player,
+  isYou,
+  isActive,
+  turnDeadline,
+  totalSeconds = 30,
+  isMultiplayer = false,
+}) => (
   <div className={`player-seat ${isYou ? 'is-you' : ''} ${isActive ? 'active-player' : ''} ${player.isEliminated ? 'eliminated' : ''}`}>
     {isActive && <div className="active-indicator">●</div>}
+    {isActive && isMultiplayer && !isYou && (
+      <TurnTimer deadline={turnDeadline ?? null} totalSeconds={totalSeconds} compact />
+    )}
     <h4>{player.name}</h4>
     {player.isEliminated ? (
       <p className="stack-eliminated">Eliminated</p>

@@ -133,11 +133,11 @@ export function getItemRarity(type: ShopItemType): ShopItemRarity {
  */
 export function getItemShopWeight(type: ShopItemType): number {
   switch (getItemRarity(type)) {
-    case ShopItemRarity.Unique: return 0;
-    case ShopItemRarity.Gold:   return 1;
-    case ShopItemRarity.Silver: return 2;
-    case ShopItemRarity.Bronze: return 5;
-    case ShopItemRarity.Copper: return 10;
+    case ShopItemRarity.Unique: return 1;
+    case ShopItemRarity.Gold:   return 2;
+    case ShopItemRarity.Silver: return 4;
+    case ShopItemRarity.Bronze: return 10;
+    case ShopItemRarity.Copper: return 20;
   }
 }
 

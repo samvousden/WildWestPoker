@@ -33,6 +33,7 @@ import {
   BotProfile,
   BotItemRule,
   DEFAULT_BOT_PROFILES,
+  TimerSettings,
 } from '@poker/shared';
 
 /**
@@ -71,6 +72,9 @@ export class GameManager {
       players: [],
       board: [],
       caughtCheaterPlayerId: null,
+      gameMode: 'vsBot',
+      timerSettings: { bettingSeconds: 30, shopSeconds: 60 },
+      turnDeadline: null,
     };
   }
 
@@ -97,6 +101,53 @@ export class GameManager {
 
   isFoldedOut(): boolean {
     return this.foldedOut;
+  }
+
+  isMultiplayerMode(): boolean {
+    return this.gameState.gameMode === 'multiplayer';
+  }
+
+  getHostPlayerId(): number {
+    return this.gameState.players[0]?.id ?? 0;
+  }
+
+  setTimerSettings(settings: TimerSettings): void {
+    const clamp = (v: number) => Math.max(10, Math.min(300, Math.round(v)));
+    this.gameState.timerSettings = {
+      bettingSeconds: clamp(settings.bettingSeconds),
+      shopSeconds: clamp(settings.shopSeconds),
+    };
+  }
+
+  setTurnDeadline(seconds: number | null): void {
+    this.gameState.turnDeadline = seconds !== null ? Date.now() + seconds * 1000 : null;
+  }
+
+  /**
+   * Called by the server timer when a betting turn expires.
+   * Submits Check if legal for the active player, otherwise Fold.
+   * Returns false if the player was not the active player (race condition guard).
+   */
+  autoFoldOrCheck(playerId: number): boolean {
+    if (this.gameState.activePlayerId !== playerId) return false;
+    const player = this.gameState.players.find(p => p.id === playerId);
+    if (!player || player.hasFolded || player.isAllIn) return false;
+    const canCheck = this.gameState.currentBetToMatch === player.committedThisRound;
+    return this.submitAction(playerId, {
+      type: canCheck ? PokerActionType.Check : PokerActionType.Fold,
+    });
+  }
+
+  /**
+   * Called by the server timer when a shop/showdown phase timer expires.
+   * Marks all unready, non-eliminated, non-bot players as ready.
+   */
+  autoReadyAllHumans(): void {
+    for (const player of this.gameState.players) {
+      if (!player.isBot && !player.isEliminated && !player.isReady) {
+        player.isReady = true;
+      }
+    }
   }
 
   getBotAction(botId: number): PokerAction {
@@ -501,6 +552,8 @@ export class GameManager {
       hasWonWithOnePair: false,
     });
 
+    this.gameState.gameMode = 'multiplayer';
+
     return playerId;
   }
 
@@ -533,6 +586,8 @@ export class GameManager {
     this.gameState.activePlayerId = 0;
     this.gameState.dealerPlayerId = 0;
     this.gameState.caughtCheaterPlayerId = null;
+    this.gameState.gameMode = 'vsBot';
+    this.gameState.turnDeadline = null;
 
     // Add human player
     const playerId = 1;
@@ -752,6 +807,23 @@ export class GameManager {
     // Big blind is last to act preflop — but this is a forced blind, not a voluntary raise
     // so lastRaiserId stays 0 (no raise yet; round ends when all non-all-in players have acted)
     this.lastRaiserId = 0;
+
+    // Set initial betting deadline in multiplayer mode
+    this.updateBettingDeadline();
+  }
+
+  private updateBettingDeadline(): void {
+    if (this.gameState.gameMode !== 'multiplayer') return;
+    if (this.gameState.phase === HandPhase.Betting) {
+      const nextPlayer = this.gameState.players.find(p => p.id === this.gameState.activePlayerId);
+      if (nextPlayer && !nextPlayer.isBot) {
+        this.setTurnDeadline(this.gameState.timerSettings.bettingSeconds);
+      } else {
+        this.setTurnDeadline(null);
+      }
+    } else {
+      this.setTurnDeadline(null);
+    }
   }
 
   submitAction(playerId: number, action: PokerAction): boolean {
@@ -777,6 +849,7 @@ export class GameManager {
       ).length;
       if (activePlayersCount === 1) {
         this.handleFoldOutWinner();
+        this.updateBettingDeadline();
         return true;
       }
 
@@ -784,6 +857,7 @@ export class GameManager {
       if (this.isBettingRoundComplete()) {
         this.advanceBettingRound();
       }
+      this.updateBettingDeadline();
       return true;
     }
 
@@ -860,6 +934,7 @@ export class GameManager {
     if (activePlayersCount === 1) {
       // One player remains - they win immediately
       this.handleFoldOutWinner();
+      this.updateBettingDeadline();
       return true;
     }
 
@@ -871,6 +946,7 @@ export class GameManager {
       this.advanceBettingRound();
     }
 
+    this.updateBettingDeadline();
     return true;
   }
 

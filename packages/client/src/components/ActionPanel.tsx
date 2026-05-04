@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 import { PokerActionType } from '@poker/shared';
+import { TurnTimer } from './TurnTimer';
 
 export const ActionPanel: React.FC = () => {
   const { gameState, playerId, submitAction } = useGame();
@@ -11,10 +12,15 @@ export const ActionPanel: React.FC = () => {
   const player = gameState.players.find(p => p.id === playerId);
   if (!player || gameState.activePlayerId !== playerId) return null;
 
+  const showTimer = gameState.gameMode === 'multiplayer';
+
   // All-in players can only pass their turn (to use items if they have any)
   if (player.isAllIn) {
     return (
       <div className="action-panel">
+        {showTimer && (
+          <TurnTimer deadline={gameState.turnDeadline} totalSeconds={gameState.timerSettings.shopSeconds} />
+        )}
         <h3>Your Turn (All In)</h3>
         <p style={{ fontSize: '0.9em', color: '#aaa' }}>Use any items above, then end your turn.</p>
         <button onClick={() => submitAction({ type: PokerActionType.Check })}>End Turn</button>
@@ -39,6 +45,9 @@ export const ActionPanel: React.FC = () => {
 
   return (
     <div className="action-panel">
+      {showTimer && (
+        <TurnTimer deadline={gameState.turnDeadline} totalSeconds={gameState.timerSettings.bettingSeconds} />
+      )}
       <h3>Your Turn</h3>
       <button onClick={() => submitAction({ type: PokerActionType.Fold })}>Fold</button>
       <button

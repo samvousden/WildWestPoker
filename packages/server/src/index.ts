@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import { GameManager } from './gameManager.js';
-import { GameState, PokerAction, PokerActionType, ShopItemType, Card, getCardPrice, ShopSlotItem, resolveJokersForShowdown, isJokerCard } from '@poker/shared';
+import { GameState, HandPhase, PokerAction, PokerActionType, ShopItemType, Card, getCardPrice, ShopSlotItem, resolveJokersForShowdown, isJokerCard, TimerSettings } from '@poker/shared';
 
 const app = express();
 const httpServer = createServer(app);
@@ -20,6 +20,129 @@ app.use(express.json());
 const gameManager = new GameManager();
 const playerSessions = new Map<string, number>(); // socketId -> playerId
 let lastGamePhase = 0; // Track last phase to detect showdown
+
+// ─── Turn timer state ─────────────────────────────────────────────────────────
+let currentTimer: NodeJS.Timeout | null = null;
+let timerContextKey: string | null = null;
+
+function rescheduleTimer(state: GameState): void {
+  if (currentTimer) {
+    clearTimeout(currentTimer);
+    currentTimer = null;
+  }
+
+  if (state.gameMode !== 'multiplayer') return;
+
+  // Determine timer context for this state
+  let newContextKey: string | null = null;
+  let seconds = 0;
+
+  if (state.phase === HandPhase.Betting) {
+    const activePlayer = state.players.find(p => p.id === state.activePlayerId);
+    if (activePlayer && !activePlayer.isBot) {
+      newContextKey = `betting-${state.activePlayerId}-${state.round}`;
+      seconds = state.timerSettings.bettingSeconds;
+    }
+  } else if (state.phase === HandPhase.Showdown || state.phase === HandPhase.ItemShop) {
+    const hasUnreadyHuman = state.players.some(p => !p.isBot && !p.isEliminated && !p.isReady);
+    if (hasUnreadyHuman) {
+      newContextKey = `shop-${state.phase}`;
+      seconds = state.timerSettings.shopSeconds;
+    }
+  }
+
+  if (newContextKey === null) {
+    timerContextKey = null;
+    return;
+  }
+
+  // Only set a fresh deadline when context changes (new turn / new phase)
+  if (newContextKey !== timerContextKey) {
+    timerContextKey = newContextKey;
+    gameManager.setTurnDeadline(seconds);
+    // Push the updated deadline to all clients
+    io.emit('game-state-updated', gameManager.getGameState());
+  }
+
+  const deadline = gameManager.getGameState().turnDeadline;
+  if (deadline === null) return;
+  const delay = Math.max(0, deadline - Date.now());
+
+  currentTimer = setTimeout(() => {
+    currentTimer = null;
+    timerContextKey = null;
+    const s = gameManager.getGameState();
+
+    if (s.phase === HandPhase.Betting) {
+      const acted = gameManager.autoFoldOrCheck(s.activePlayerId);
+      if (acted) {
+        const newState = gameManager.getGameState();
+        if (newState.phase === HandPhase.Showdown && lastGamePhase !== HandPhase.Showdown) {
+          lastGamePhase = HandPhase.Showdown;
+          handleShowdown();
+        } else {
+          io.emit('game-state-updated', newState);
+          if (newState.phase === HandPhase.Betting) {
+            const nextPlayer = newState.players.find(p => p.id === newState.activePlayerId);
+            if (nextPlayer?.isBot) {
+              executeBotTurns().catch(err => console.error('[Timer] bot turns error:', err));
+            } else {
+              rescheduleTimer(newState);
+            }
+          }
+        }
+      }
+    } else if (s.phase === HandPhase.Showdown || s.phase === HandPhase.ItemShop) {
+      gameManager.autoReadyAllHumans();
+      triggerReadyTransition(s.phase);
+    }
+  }, delay);
+}
+
+/** Shared logic: check all-ready condition and advance phase after readying. */
+function triggerReadyTransition(phase: HandPhase): void {
+  const currentState = gameManager.getGameState();
+
+  if (phase === HandPhase.Showdown) {
+    const activePlayers = currentState.players.filter(p => !p.isEliminated);
+    const allReady = activePlayers.length >= 1 && activePlayers.every(p => p.isReady);
+    if (allReady) {
+      for (const player of currentState.players) player.isReady = false;
+      gameManager.tickLuckBuffs();
+      currentState.phase = HandPhase.ItemShop;
+      io.emit('game-state-updated', currentState);
+      rescheduleTimer(gameManager.getGameState());
+    }
+  } else if (phase === HandPhase.ItemShop) {
+    const nonEliminated = currentState.players.filter(p => !p.isEliminated);
+    const allReady = nonEliminated.length >= 2 && nonEliminated.every(p => p.isReady);
+    if (allReady) {
+      gameManager.startHand();
+      lastGamePhase = 0;
+      io.emit('hand-started', gameManager.getGameState());
+
+      gameManager.getGameState().players.forEach(player => {
+        const holeCards = gameManager.getHoleCards(player.id);
+        if (holeCards) {
+          io.to(
+            Array.from(playerSessions.entries())
+              .find(([_, pid]) => pid === player.id)?.[0] || ''
+          ).emit('hole-cards', holeCards);
+        }
+      });
+
+      const initialState = gameManager.getGameState();
+      rescheduleTimer(initialState);
+      if (initialState.phase === HandPhase.Betting) {
+        const activePlayer = initialState.players.find(p => p.id === initialState.activePlayerId);
+        if (activePlayer?.isBot) {
+          executeBotTurns().catch(err => console.error('[Timer] bot turns error after shop:', err));
+        }
+      }
+    }
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Helper function to execute bot turns with delays
 async function executeBotTurns(): Promise<void> {
@@ -130,6 +253,7 @@ function handleShowdown(): void {
   
   // Emit the reset game state so client knows players aren't ready
   io.emit('game-state-updated', currentState);
+  rescheduleTimer(currentState);
   
   if (foldedOut) {
     // Fold-out win: don't send hole cards
@@ -190,7 +314,7 @@ io.on('connection', (socket) => {
     const currentState = gameManager.getGameState();
     
     // Handle Showdown phase: wait for all players to ready up, then transition to ItemShop
-    if (currentState.phase === 3) { // HandPhase.Showdown
+    if (currentState.phase === HandPhase.Showdown) {
       gameManager.setReady(playerId, isReady);
       io.emit('player-ready', { playerId, isReady });
       
@@ -203,25 +327,13 @@ io.on('connection', (socket) => {
           }
         }
         io.emit('game-state-updated', currentState);
+        rescheduleTimer(currentState);
       }
-      
-      // Only transition when ALL non-eliminated players are ready
-      const activePlayers = currentState.players.filter(p => !p.isEliminated);
-      const allShowdownReady = activePlayers.length >= 1 && activePlayers.every(p => p.isReady);
-      if (allShowdownReady) {
-        // Reset ready states and transition to ItemShop
-        for (const player of currentState.players) {
-          player.isReady = false;
-        }
-        // Decrement luck buffs at end of hand (so the hand that was just played counts)
-        gameManager.tickLuckBuffs();
-        currentState.phase = 4; // HandPhase.ItemShop
-        io.emit('game-state-updated', currentState);
-      }
+
+      triggerReadyTransition(HandPhase.Showdown);
     } 
-    // Handle ItemShop phase: transition to Lobby when ready
-    else if (currentState.phase === 4) { // HandPhase.ItemShop
-      // Set the player as ready
+    // Handle ItemShop phase: transition to next hand when all ready
+    else if (currentState.phase === HandPhase.ItemShop) {
       gameManager.setReady(playerId, isReady);
       io.emit('player-ready', { playerId, isReady });
       
@@ -234,37 +346,8 @@ io.on('connection', (socket) => {
           }
         }
       }
-      
-      // Check if all non-eliminated players ready to start next hand directly (skip Lobby)
-      const nonEliminated = currentState.players.filter(p => !p.isEliminated);
-      const allReady = nonEliminated.length >= 2 && 
-        nonEliminated.every(p => p.isReady);
-      if (allReady) {
-        // Skip Lobby and go directly to next hand
-        gameManager.startHand();
-        lastGamePhase = 0; // Reset phase tracking for new hand
-        io.emit('hand-started', gameManager.getGameState());
-        
-        // Send hole cards to each player
-        gameManager.getGameState().players.forEach(player => {
-          const holeCards = gameManager.getHoleCards(player.id);
-          if (holeCards) {
-            io.to(
-              Array.from(playerSessions.entries())
-                .find(([_, pid]) => pid === player.id)?.[0] || ''
-            ).emit('hole-cards', holeCards);
-          }
-        });
 
-        // If it's a bot's turn, execute bot turns
-        const initialState = gameManager.getGameState();
-        if (initialState.phase === 2) { // HandPhase.Betting = 2
-          const activePlayer = initialState.players.find(p => p.id === initialState.activePlayerId);
-          if (activePlayer && activePlayer.isBot) {
-            executeBotTurns().catch(err => console.error('Error executing bot turns:', err));
-          }
-        }
-      }
+      triggerReadyTransition(HandPhase.ItemShop);
     }
     // Default: handle other phases (Lobby, etc.)
     else {
@@ -276,7 +359,7 @@ io.on('connection', (socket) => {
   socket.on('start-hand', (playerId: number) => {
     if (gameManager.canStartHand(playerId)) {
       gameManager.startHand();
-      lastGamePhase = 0; // Reset phase tracking for new hand
+      lastGamePhase = 0;
       io.emit('hand-started', gameManager.getGameState());
       
       // Send hole cards to each player
@@ -290,11 +373,11 @@ io.on('connection', (socket) => {
         }
       });
 
-      // If it's a bot's turn, execute bot turns
       const initialState = gameManager.getGameState();
-      if (initialState.phase === 2) { // HandPhase.Betting = 2
+      rescheduleTimer(initialState);
+      if (initialState.phase === HandPhase.Betting) {
         const activePlayer = initialState.players.find(p => p.id === initialState.activePlayerId);
-        if (activePlayer && activePlayer.isBot) {
+        if (activePlayer?.isBot) {
           executeBotTurns().catch(err => console.error('Error executing bot turns:', err));
         }
       }
@@ -309,18 +392,20 @@ io.on('connection', (socket) => {
       io.emit('game-state-updated', currentState);
       
       // Check for showdown transition
-      if (currentState.phase === 3 && lastGamePhase !== 3) {
-        lastGamePhase = 3;
+      if (currentState.phase === HandPhase.Showdown && lastGamePhase !== HandPhase.Showdown) {
+        lastGamePhase = HandPhase.Showdown;
         handleShowdown();
       } else if (currentState.phase !== lastGamePhase) {
         lastGamePhase = currentState.phase;
       }
       
       // If it's a bot's turn, execute bot turns with delays
-      if (currentState.phase === 2) { // HandPhase.Betting = 2
+      if (currentState.phase === HandPhase.Betting) {
         const activePlayer = currentState.players.find(p => p.id === currentState.activePlayerId);
-        if (activePlayer && activePlayer.isBot) {
+        if (activePlayer?.isBot) {
           executeBotTurns().catch(err => console.error('Error executing bot turns:', err));
+        } else {
+          rescheduleTimer(currentState);
         }
       }
       
@@ -514,6 +599,17 @@ io.on('connection', (socket) => {
     } else {
       callback({ success: false, error: result.error });
     }
+  });
+
+  socket.on('set-timer-settings', (playerId: number, settings: TimerSettings, callback: (res: { success: boolean; error?: string }) => void) => {
+    if (playerId !== gameManager.getHostPlayerId()) {
+      callback({ success: false, error: 'Only the host can change timer settings' });
+      return;
+    }
+    gameManager.setTimerSettings(settings);
+    const updatedState = gameManager.getGameState();
+    io.emit('game-state-updated', updatedState);
+    callback({ success: true });
   });
 
   socket.on('disconnect', () => {

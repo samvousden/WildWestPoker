@@ -59,6 +59,11 @@ export interface PlayerPublicState {
   };
 }
 
+export interface TimerSettings {
+  bettingSeconds: number;
+  shopSeconds: number;
+}
+
 export interface GameState {
   phase: HandPhase;
   round: BettingRound;
@@ -71,6 +76,9 @@ export interface GameState {
   players: PlayerPublicState[];
   board: Card[];
   caughtCheaterPlayerId: number | null;
+  gameMode: 'multiplayer' | 'vsBot';
+  timerSettings: TimerSettings;
+  turnDeadline: number | null; // UTC ms timestamp; null = no active timer
 }
 
 import { Card } from './card.js';
