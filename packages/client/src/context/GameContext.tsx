@@ -35,6 +35,7 @@ interface GameContextType {
   // Actions
   joinTable: (playerName: string) => Promise<number | false>;
   playVsBots: (playerName: string) => Promise<number | false>;
+  playGauntlet: (playerName: string) => Promise<number | false>;
   setReady: (isReady: boolean) => void;
   startHand: () => void;
   submitAction: (action: PokerAction) => Promise<boolean>;
@@ -84,7 +85,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [spadeOfSpadesBonus, setSpadeOfSpadesBonus] = useState(5);
   const [hasRerolledThisHand, setHasRerolledThisHand] = useState(false);
 
-  const serverUrl = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+  const browserOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const isLocalBrowser = browserOrigin.includes('localhost') || browserOrigin.includes('127.0.0.1');
+  const fallbackSocketUrl = isLocalBrowser ? 'http://localhost:5000' : browserOrigin;
+  const serverUrl = import.meta.env.VITE_SOCKET_URL || fallbackSocketUrl;
+
+  useEffect(() => {
+    if (!import.meta.env.VITE_SOCKET_URL && !isLocalBrowser) {
+      console.warn('VITE_SOCKET_URL is not set. Falling back to current origin for Socket.io:', serverUrl);
+    }
+  }, [isLocalBrowser, serverUrl]);
 
   useEffect(() => {
     const newSocket = io(serverUrl, {
@@ -233,6 +243,49 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       socket.emit('set-ready', playerId, isReady);
     },
     [socket, playerId]
+  );
+
+  const playGauntlet = useCallback(
+    async (playerName: string): Promise<number | false> => {
+      if (!socket) return false;
+
+      return new Promise(resolve => {
+        socket.emit('play-gauntlet', playerName, ({ playerId: pid, success }: { playerId: number; success: boolean }) => {
+          if (success) {
+            setPlayerId(pid);
+            // Reset all local game state (same as playVsBots)
+            setHoleCards(null);
+            setSleeveCard(null);
+            setSleeveCard2(null);
+            setSleeveUsedThisHand(false);
+            setAllPlayerCards(null);
+            setWinnerId(null);
+            setWinnerIds([]);
+            setFoldedOut(false);
+            setXrayCharges(0);
+            setLoadedDeckCharges(0);
+            setCardRerollCharges(0);
+            setStickyFingersCharges(0);
+            setHiddenCameraCharges(0);
+            setRevealedCards(new Map());
+            setPeekedCard(null);
+            setHasGun(false);
+            setBullets(0);
+            setShotFiredEvent(null);
+            setBonds([]);
+            setStockOptions([]);
+            setTotalLuck(0);
+            setLuckBuffs([]);
+            setSpadeOfSpadesBonus(5);
+            setHasRerolledThisHand(false);
+            resolve(pid);
+          } else {
+            resolve(false);
+          }
+        });
+      });
+    },
+    [socket]
   );
 
   const startHand = useCallback(() => {
@@ -452,6 +505,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         hasRerolledThisHand,
         joinTable,
         playVsBots,
+        playGauntlet,
         setReady,
         startHand,
         submitAction,

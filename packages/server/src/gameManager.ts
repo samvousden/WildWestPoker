@@ -34,6 +34,14 @@ import {
   BotProfile,
   BotItemRule,
   DEFAULT_BOT_PROFILES,
+  shouldBotUseXRayGoggles,
+  shouldBotUseGun,
+  selectCardsForBotSleeve,
+  GauntletState,
+  GAUNTLET_BOT_PROGRESSION,
+  GAUNTLET_MAX_ROUNDS,
+  calculateNextRoundBotStartingStack,
+  getGauntletRoundBots,
   TimerSettings,
 } from '@poker/shared';
 
@@ -60,6 +68,8 @@ export class GameManager {
   private smallBlind: number = 5;
   private bigBlind: number = 10;
   private handsPlayedSinceBlindIncrease: number = 0;
+  private gauntletPlayerStartingStack: number = 0; // Track player's starting stack for gauntlet bankroll calculation
+  private gauntletTotalPreviousRound: number = 0; // Track total chips (player + bots) from previous gauntlet round
 
   constructor() {
     this.gameState = {
@@ -722,6 +732,271 @@ export class GameManager {
     const player = this.gameState.players.find(p => p.id === playerId);
     if (player) {
       player.isReady = isReady;
+    }
+  }
+
+  /**
+   * Initializes a gauntlet mode game.
+   * Player starts round 1 vs 3 progressively harder bots.
+   * Each subsequent round escalates bot bankroll based on previous round total.
+   * 
+   * @param playerName Name of the human player
+   * @returns The player ID (typically 1)
+   */
+  initGauntlet(playerName: string): number {
+    // Reset game state
+    this.gameState.players = [];
+    this.gameState.phase = HandPhase.Lobby;
+    this.gameState.round = BettingRound.None;
+    this.gameState.pot = 0;
+    this.gameState.currentBetToMatch = 0;
+    this.gameState.smallBlind = 5;
+    this.gameState.bigBlind = 10;
+    this.gameState.board = [];
+    this.gameState.activePlayerId = 0;
+    this.gameState.dealerPlayerId = 0;
+    this.gameState.caughtCheaterPlayerId = null;
+    this.gameState.gameMode = 'gauntlet';
+    this.gameState.turnDeadline = null;
+
+    // Initialize gauntlet state for round 1
+    this.gameState.gauntletState = {
+      currentRound: 1,
+      maxRounds: GAUNTLET_MAX_ROUNDS,
+      botProgressionByRound: GAUNTLET_BOT_PROGRESSION,
+      previousRoundTotalChips: 0,
+      playerCarriedStack: null,
+    };
+
+    const playerId = 1;
+    const startingStack = 1000;
+    this.gauntletPlayerStartingStack = startingStack;
+
+    // Add human player
+    this.gameState.players.push({
+      id: playerId,
+      name: playerName,
+      stack: startingStack,
+      committedThisRound: 0,
+      contributedThisHand: 0,
+      isSeated: true,
+      isReady: false,
+      isInHand: false,
+      hasFolded: false,
+      isAllIn: false,
+      isBot: false,
+      isEliminated: false,
+      inventory: [],
+    });
+
+    this.playerPrivateState.set(playerId, {
+      hasGun: false,
+      bullets: 0,
+      hasCardSleeveUnlock: false,
+      sleeveCard: null,
+      hasSleeveExtender: false,
+      sleeveCard2: null,
+      xrayCharges: 0,
+      loadedDeckCharges: 0,
+      cardRerollCharges: 0,
+      stickyFingersCharges: 0,
+      permanentLuck: 0,
+      luckBuffs: [],
+      hasRake: false,
+      hiddenCameraCharges: 0,
+      cheatedThisHand: false,
+      bonds: [],
+      stockOptions: [],
+      hasFourLeafClover: false,
+      hasFiveLeafClover: false,
+      unlockedShopSlots: 1,
+      hasHeartOfHearts: false,
+      hasSpadeOfSpades: false,
+      spadeOfSpadesBonus: 5,
+      hasPairOfPairs: false,
+      hasImprovedPairOfPairs: false,
+      hasWonWithOnePair: false,
+      hasCardShark: false,
+      hasRabbitsFoot: false,
+      hasLostAtShowdown: false,
+      hasEverBoughtLuckItem: false,
+    });
+
+    // Add bots for round 1
+    this.addGauntletRoundBots(1, startingStack);
+
+    return playerId;
+  }
+
+  /**
+   * Adds bots for a specific gauntlet round.
+   * @param roundNumber 1-indexed round number
+   * @param botStartingStack Starting stack for each bot in this round
+   */
+  private addGauntletRoundBots(roundNumber: number, botStartingStack: number): void {
+    const botIds = getGauntletRoundBots(roundNumber);
+    if (!botIds) return; // Invalid round number
+
+    let nextBotId = 2; // Bot IDs start at 2
+
+    for (const botId of botIds) {
+      const profile = DEFAULT_BOT_PROFILES.find(p => p.id === botId);
+      if (!profile) continue;
+
+      const newBotId = nextBotId++;
+
+      this.gameState.players.push({
+        id: newBotId,
+        name: profile.displayName,
+        stack: botStartingStack,
+        committedThisRound: 0,
+        contributedThisHand: 0,
+        isSeated: true,
+        isReady: true,
+        isInHand: false,
+        hasFolded: false,
+        isAllIn: false,
+        isBot: true,
+        isEliminated: false,
+        inventory: [],
+      });
+
+      this.playerPrivateState.set(newBotId, {
+        hasGun: false,
+        bullets: 0,
+        hasCardSleeveUnlock: false,
+        sleeveCard: null,
+        hasSleeveExtender: false,
+        sleeveCard2: null,
+        xrayCharges: 0,
+        loadedDeckCharges: 0,
+        cardRerollCharges: 0,
+        stickyFingersCharges: 0,
+        permanentLuck: 0,
+        luckBuffs: [],
+        hasRake: false,
+        hiddenCameraCharges: 0,
+        cheatedThisHand: false,
+        bonds: [],
+        stockOptions: [],
+        hasFourLeafClover: false,
+        hasFiveLeafClover: false,
+        unlockedShopSlots: 1,
+        hasHeartOfHearts: false,
+        hasSpadeOfSpades: false,
+        spadeOfSpadesBonus: 5,
+        hasPairOfPairs: false,
+        hasImprovedPairOfPairs: false,
+        hasWonWithOnePair: false,
+        hasCardShark: false,
+        hasRabbitsFoot: false,
+        hasLostAtShowdown: false,
+        hasEverBoughtLuckItem: false,
+      });
+
+      this.botProfiles.set(newBotId, profile);
+      this.applyBotStartingItems(newBotId, profile.startingItems);
+    }
+  }
+
+  /**
+   * Advances gauntlet mode to the next round or ends the game.
+   * Called when current round is won (all bots eliminated).
+   * 
+   * @returns true if advancing to next round, false if gauntlet is complete
+   */
+  advanceGauntletRound(): boolean {
+    if (!this.gameState.gauntletState) return false;
+
+    const { currentRound, maxRounds } = this.gameState.gauntletState;
+
+    if (currentRound >= maxRounds) {
+      // Gauntlet is complete - player won!
+      return false;
+    }
+
+    // Calculate total chips from this round (for bot starting stack in next round)
+    const totalThisRound = this.gameState.players.reduce((sum, p) => sum + p.stack, 0);
+
+    // Prepare for next round
+    const nextRound = currentRound + 1;
+    const playerStack = this.gameState.players[0].stack; // Player is always ID 1 (index 0)
+    const nextBotStack = calculateNextRoundBotStartingStack(totalThisRound);
+
+    // Update gauntlet state
+    this.gameState.gauntletState.currentRound = nextRound;
+    this.gameState.gauntletState.previousRoundTotalChips = totalThisRound;
+    this.gauntletTotalPreviousRound = totalThisRound;
+
+    // Reset for new round, keeping player and eliminating old bots
+    const player = this.gameState.players[0];
+    this.gameState.players = [player]; // Keep only the player
+    player.stack = playerStack;
+    player.isReady = false;
+    player.isInHand = false;
+    player.hasFolded = false;
+    player.isAllIn = false;
+    player.isEliminated = false;
+
+    // Clear bot profiles and states for old bots
+    this.botProfiles.clear();
+    this.playerPrivateState.forEach((_, id) => {
+      if (id !== 1) this.playerPrivateState.delete(id);
+    });
+
+    // Add new bots for this round
+    this.addGauntletRoundBots(nextRound, nextBotStack);
+
+    // Reset for the new hand
+    this.gameState.phase = HandPhase.Lobby;
+    this.gameState.round = BettingRound.None;
+    this.gameState.pot = 0;
+    this.gameState.currentBetToMatch = 0;
+    this.gameState.board = [];
+    this.gameState.activePlayerId = 0;
+    this.gameState.dealerPlayerId = 0;
+    this.gameState.caughtCheaterPlayerId = null;
+    this.gameState.turnDeadline = null;
+
+    return true;
+  }
+
+  /**
+   * Executes automatic shop purchases for bots with special shopping behaviors.
+   * Called during the ItemShop phase for each bot that needs auto-purchases.
+   * 
+   * - Gunslinger: Buys a bullet for $100 if they have 0 bullets
+   * - Mr. Roboto: Buys X-Ray Goggles and Hidden Camera if charges are depleted
+   */
+  executeBotShopPurchases(botId: number): void {
+    const bot = this.gameState.players.find(p => p.id === botId);
+    const profile = this.botProfiles.get(botId);
+    const ps = this.playerPrivateState.get(botId);
+
+    if (!bot || !profile || !ps) return;
+
+    // Gunslinger: Buy bullets if empty
+    if (profile.id === 'gunslinger') {
+      if (ps.bullets === 0 && bot.stack >= 100) {
+        bot.stack -= 100;
+        ps.bullets += 1;
+      }
+    }
+
+    // Mr. Roboto: Buy X-Ray Goggles if charges depleted
+    if (profile.id === 'mr-roboto') {
+      if (ps.xrayCharges === 0 && bot.stack >= getPrice(ShopItemType.XRayGoggles)) {
+        const cost = getPrice(ShopItemType.XRayGoggles);
+        bot.stack -= cost;
+        ps.xrayCharges = 3; // X-Ray comes with 3 charges
+      }
+
+      // Mr. Roboto: Buy Hidden Camera if charges depleted
+      if (ps.hiddenCameraCharges === 0 && bot.stack >= getPrice(ShopItemType.HiddenCamera)) {
+        const cost = getPrice(ShopItemType.HiddenCamera);
+        bot.stack -= cost;
+        ps.hiddenCameraCharges = 3; // Hidden Camera comes with 3 charges
+      }
     }
   }
 
@@ -1441,6 +1716,79 @@ export class GameManager {
       this.botItemRulesFiredThisHand.add(botId);
     }
     return didSomething;
+  }
+
+  /**
+   * Determines if a bot should use X-Ray Goggles and if so, returns the peeked card.
+   * Only bots with strategic or random usage styles that own X-Ray Goggles will peek.
+   * Strategic bots peek when pot odds justify it; random bots peek based on probability.
+   * 
+   * Returns true if bot should use X-Ray Goggles.
+   * Note: The actual card consumption and cheating flag will be handled by the caller.
+   */
+  botShouldUseXRayGoggles(botId: number): boolean {
+    const profile = this.botProfiles.get(botId);
+    if (!profile) return false;
+
+    const { itemStrategy } = profile;
+    if (!itemStrategy.useXRayGoggles) return false;
+
+    // Check if bot owns X-Ray Goggles with charges
+    const ps = this.playerPrivateState.get(botId);
+    if (!ps || ps.xrayCharges <= 0) return false;
+
+    const botStack = this.gameState.players.find(p => p.id === botId)?.stack ?? 0;
+
+    // Use helper from bots.ts to decide if bot should use X-Ray
+    return shouldBotUseXRayGoggles(profile, this.gameState, botStack);
+  }
+
+  /**
+   * Executes bot sleeve strategy: determines which hole cards the bot should place in sleeves.
+   * Strategic bots hide high-value cards (face cards, pairs); others don't use sleeves.
+   * 
+   * Returns indices of cards to hide, or empty array if none should be hidden.
+   */
+  botExecuteSleeveStrategy(botId: number, holeCards: [Card, Card]): number[] {
+    const profile = this.botProfiles.get(botId);
+    if (!profile) return [];
+
+    const ps = this.playerPrivateState.get(botId);
+    if (!ps) return [];
+
+    // Calculate available sleeve capacity
+    let sleeveCapacity = 0;
+    if (ps.hasCardSleeveUnlock) {
+      sleeveCapacity = 1;
+    }
+    if (ps.hasSleeveExtender) {
+      sleeveCapacity = 2;
+    }
+
+    if (sleeveCapacity === 0) return [];
+
+    // Use selectCardsForBotSleeve from bots.ts to determine which cards to hide
+    return selectCardsForBotSleeve(profile, holeCards, sleeveCapacity);
+  }
+
+  /**
+   * Determines if a bot should use Gun item against a target.
+   * Strategic bots only shoot confirmed cheaters; random bots shoot with low probability.
+   * 
+   * Returns true if bot should attempt to shoot.
+   */
+  botShouldUseGun(botId: number, targetId: number, targetCheated: boolean): boolean {
+    const profile = this.botProfiles.get(botId);
+    if (!profile) return false;
+
+    const ps = this.playerPrivateState.get(botId);
+    if (!ps) return false;
+
+    // Check if bot owns Gun and bullets
+    if (!ps.hasGun || ps.bullets <= 0) return false;
+
+    // Use helper from bots.ts to decide if bot should shoot
+    return shouldBotUseGun(profile, targetCheated);
   }
 
   playerDisconnected(playerId: number): void {

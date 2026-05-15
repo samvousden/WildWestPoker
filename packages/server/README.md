@@ -19,7 +19,9 @@ Server runs on `http://localhost:5000` by default.
 ## Environment Variables
 
 - `PORT` — Server port (default: 5000)
-- `FRONTEND_URL` — CORS origin for frontend (default: http://localhost:3000)
+- `HOST` — Bind host (default: 0.0.0.0)
+- `FRONTEND_URL` — Single CORS origin for frontend (default: http://localhost:5173)
+- `FRONTEND_URLS` — Optional comma-separated CORS origins for multiple frontend domains
 
 ## Socket.io Events
 

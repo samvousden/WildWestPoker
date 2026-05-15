@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useGame } from '../context/GameContext';
 
 export const LobbyScreen: React.FC = () => {
-  const { gameState, playerId, isConnected, joinTable, playVsBots, setReady, setTimerSettings } = useGame();
+  const { gameState, playerId, isConnected, joinTable, playVsBots, playGauntlet, setReady, setTimerSettings } = useGame();
   const [playerName, setPlayerName] = useState('Player');
   const [bettingSeconds, setBettingSeconds] = useState(30);
   const [shopSeconds, setShopSeconds] = useState(60);
@@ -18,6 +18,13 @@ export const LobbyScreen: React.FC = () => {
     const pid = await playVsBots(playerName);
     if (pid) {
       console.log(`Started bot game as player ${pid}`);
+    }
+  };
+
+  const handlePlayGauntlet = async () => {
+    const pid = await playGauntlet(playerName);
+    if (pid) {
+      console.log(`Started gauntlet as player ${pid}`);
     }
   };
 
@@ -57,6 +64,19 @@ export const LobbyScreen: React.FC = () => {
                 placeholder="Enter your name"
               />
               <button onClick={handlePlayVsBots} className="bots-btn">Play vs Bots</button>
+            </div>
+          </div>
+          <div className="divider">OR</div>
+          <div className="mode-option">
+            <h3>Bot Gauntlet</h3>
+            <div className="join-form">
+              <input
+                type="text"
+                value={playerName}
+                onChange={e => setPlayerName(e.target.value)}
+                placeholder="Enter your name"
+              />
+              <button onClick={handlePlayGauntlet} className="gauntlet-btn">Start Gauntlet</button>
             </div>
           </div>
         </div>

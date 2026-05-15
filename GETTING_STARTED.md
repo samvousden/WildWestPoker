@@ -117,7 +117,10 @@ Create `.env` files in each package:
 **packages/server/.env**
 ```
 PORT=5000
-FRONTEND_URL=http://localhost:3000
+HOST=0.0.0.0
+FRONTEND_URL=http://localhost:5173
+# Optional for multiple frontend domains:
+# FRONTEND_URLS=https://main.example.com,https://preview.example.com
 ```
 
 **packages/client/.env.local**

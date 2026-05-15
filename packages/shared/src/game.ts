@@ -64,6 +64,24 @@ export interface TimerSettings {
   shopSeconds: number;
 }
 
+/**
+ * Tracks the progression state of a bot gauntlet mode game.
+ * Players face increasingly difficult bots across multiple rounds,
+ * with bots' starting stacks escalating based on the previous round's total wealth.
+ */
+export interface GauntletState {
+  /** Current round number (1-indexed) */
+  currentRound: number;
+  /** Maximum rounds in this gauntlet (e.g., 3, 5, 10) */
+  maxRounds: number;
+  /** Bot profile IDs ordered by difficulty for each round (round -> 3 bot IDs) */
+  botProgressionByRound: string[][];
+  /** Total amount of chips from previous round (used to calculate next round's bot stack) */
+  previousRoundTotalChips: number;
+  /** Player's stack carried forward from previous round (null if first round) */
+  playerCarriedStack: number | null;
+}
+
 export interface GameState {
   phase: HandPhase;
   round: BettingRound;
@@ -76,7 +94,8 @@ export interface GameState {
   players: PlayerPublicState[];
   board: Card[];
   caughtCheaterPlayerId: number | null;
-  gameMode: 'multiplayer' | 'vsBot';
+  gameMode: 'multiplayer' | 'vsBot' | 'gauntlet';
+  gauntletState?: GauntletState; // Only populated when gameMode is 'gauntlet'
   timerSettings: TimerSettings;
   turnDeadline: number | null; // UTC ms timestamp; null = no active timer
 }
